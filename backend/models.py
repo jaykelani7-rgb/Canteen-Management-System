@@ -448,3 +448,75 @@ class PasswordResetOtp(Base):
     is_used = Column(Boolean, default=False, nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# Monthly mess membership and immutable meal audit records.
+from sqlalchemy import Date, Numeric, CheckConstraint, Index, text
+
+
+class MessPlan(Base):
+    __tablename__ = "mess_plans"
+    id = Column(String(30), primary_key=True)
+    name = Column(String(60), nullable=False)
+    amount = Column(Numeric(10, 2), nullable=False)
+    tokens = Column(Integer, nullable=False)
+    duration_days = Column(Integer, nullable=False, default=30)
+    is_active = Column(Boolean, nullable=False, default=True)
+    __table_args__ = (
+        CheckConstraint("amount >= 0 AND tokens > 0 AND duration_days > 0", name="ck_mess_plan_values"),
+    )
+
+
+class MessSubscription(Base):
+    __tablename__ = "mess_subscriptions"
+    id = Column(Integer, primary_key=True)
+    student_id = Column(String(50), ForeignKey("students.id"), nullable=True, index=True)
+    student_name = Column(String(100), nullable=False)
+    roll_number = Column(String(30), nullable=False, index=True)
+    year = Column(String(30), nullable=False)
+    branch = Column(String(100), nullable=False)
+    mobile_number = Column(String(30), nullable=False)
+    plan_type = Column(String(30), ForeignKey("mess_plans.id"), nullable=False)
+    amount_paid = Column(Numeric(10, 2), nullable=False)
+    total_tokens = Column(Integer, nullable=False)
+    remaining_tokens = Column(Integer, nullable=False)
+    start_date = Column(Date, nullable=False, index=True)
+    end_date = Column(Date, nullable=False, index=True)
+    status = Column(String(20), nullable=False, default="Active", index=True)
+    payment_method = Column(String(30), nullable=False)
+    payment_reference = Column(String(100), nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    __table_args__ = (
+        CheckConstraint("total_tokens > 0 AND remaining_tokens >= 0 AND remaining_tokens <= total_tokens", name="ck_mess_tokens"),
+        CheckConstraint("end_date >= start_date AND amount_paid >= 0", name="ck_mess_subscription_values"),
+        CheckConstraint("status IN ('Active','Expired','Exhausted','Cancelled')", name="ck_mess_subscription_status"),
+    )
+
+
+class MessMealAttendance(Base):
+    __tablename__ = "mess_meal_attendance"
+    id = Column(Integer, primary_key=True)
+    subscription_id = Column(Integer, ForeignKey("mess_subscriptions.id"), nullable=False, index=True)
+    student_id = Column(String(50), ForeignKey("students.id"), nullable=True, index=True)
+    meal_date = Column(Date, nullable=False, index=True)
+    meal_type = Column(String(20), nullable=False)
+    marked_by_admin_id = Column(Integer, ForeignKey("admin_users.id"), nullable=True)
+    status = Column(String(20), nullable=False, default="Taken")
+    token_before = Column(Integer, nullable=False)
+    token_after = Column(Integer, nullable=False)
+    marked_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    undo_reason = Column(Text, nullable=True)
+    reversed_at = Column(DateTime(timezone=True), nullable=True)
+    reversed_by_admin_id = Column(Integer, ForeignKey("admin_users.id"), nullable=True)
+    reversal_token_before = Column(Integer, nullable=True)
+    reversal_token_after = Column(Integer, nullable=True)
+    __table_args__ = (
+        # Reversed rows remain intact; re-marking creates a new audit row.
+        Index("uq_mess_taken_meal", "subscription_id", "meal_date", "meal_type", unique=True,
+              postgresql_where=text("status = 'Taken'"), sqlite_where=text("status = 'Taken'")),
+        CheckConstraint("meal_type IN ('Breakfast','Lunch','Snacks','Dinner')", name="ck_mess_meal_type"),
+        CheckConstraint("status IN ('Taken','Reversed')", name="ck_mess_attendance_status"),
+        CheckConstraint("token_before > 0 AND token_after = token_before - 1", name="ck_mess_ledger_deduction"),
+    )

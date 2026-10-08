@@ -1,31 +1,27 @@
 import React, { useState } from 'react'
-import AdminSidebar, { NavTab } from './AdminSidebar'
+import AdminSidebar, { MessSection, NavTab } from './AdminSidebar'
+import type { AdminUser } from '../lib/adminApi'
 import AdminHeader from './AdminHeader'
 import OcrMenuUpload from './OcrMenuUpload'
 import AlaCarteManagement from './AlaCarteManagement'
 import WeeklyScheduleView from './WeeklyScheduleView'
 import LiveOrdersView from './LiveOrdersView'
 import AnalyticsView from './AnalyticsView'
+import MessManagement from './MessManagement'
 import Toast, { ToastMessage } from './Toast'
 
 interface AdminDashboardProps {
-  appMode?: 'admin' | 'mobile-preview'
-  onToggleMode?: () => void
+  admin: AdminUser
+  onSignOut: () => void
 }
 
 export default function AdminDashboard({
-  appMode = 'admin',
-  onToggleMode,
+  admin,
+  onSignOut,
 }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<NavTab>('ocr-upload')
-  const [toasts, setToasts] = useState<ToastMessage[]>([
-    {
-      id: 'welcome-1',
-      title: 'Smart Canteen OS Connected',
-      description: 'PostgreSQL async pool & Redis caching node active.',
-      type: 'success',
-    },
-  ])
+  const [activeTab, setActiveTab] = useState<NavTab>('ala-carte')
+  const [messSection, setMessSection] = useState<MessSection>('members')
+  const [toasts, setToasts] = useState<ToastMessage[]>([])
 
   const showToast = (
     title: string,
@@ -50,6 +46,8 @@ export default function AdminDashboard({
 
   const getTabTitle = (tab: NavTab) => {
     switch (tab) {
+      case 'mess-management':
+        return { title: 'Mess Management', subtitle: 'Manage hostel mess subscriptions, payments, token balances and active members.' }
       case 'ocr-upload':
         return {
           title: 'Menu Upload & OCR Extraction',
@@ -89,8 +87,12 @@ export default function AdminDashboard({
     <div className="flex h-screen bg-[#F5F0EB] text-[#1D1A16] font-sans antialiased overflow-hidden selection:bg-[#F25C2C]/20 selection:text-[#F25C2C]">
       {/* Left Sidebar Navigation */}
       <AdminSidebar
+        admin={admin}
+        onSignOut={onSignOut}
         activeTab={activeTab}
         onSelectTab={setActiveTab}
+        messSection={messSection}
+        onSelectMessSection={section => { setMessSection(section); setActiveTab('mess-management') }}
         pendingOrdersCount={4}
         isLiveService={true}
       />
@@ -101,8 +103,6 @@ export default function AdminDashboard({
         <AdminHeader
           title={title}
           subtitle={subtitle}
-          appMode={appMode}
-          onToggleMode={onToggleMode}
           onQuickAction={
             activeTab === 'ocr-upload'
               ? () => showToast('OCR Ready', 'Drop an image to start character extraction.', 'info')
@@ -142,6 +142,7 @@ export default function AdminDashboard({
           )}
 
           {activeTab === 'analytics' && <AnalyticsView />}
+          {activeTab === 'mess-management' && <MessManagement section={messSection} onShowToast={showToast} />}
 
           {activeTab === 'settings' && (
             <div className="max-w-4xl mx-auto p-8 rounded-3xl bg-white border border-[#E5DFD7] shadow-sm space-y-6">

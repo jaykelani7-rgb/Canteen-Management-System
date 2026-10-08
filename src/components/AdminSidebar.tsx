@@ -1,4 +1,13 @@
-import React from 'react'
+import React, { useState } from 'react'
+import type { AdminUser } from '../lib/adminApi'
+
+export type MessSection = 'members' | 'attendance' | 'plans'
+const messSections: { id: MessSection; label: string }[] = [
+  { id: 'members', label: 'Members' },
+  { id: 'attendance', label: 'Daily Attendance' },
+  { id: 'plans', label: 'Plans / Settings' },
+]
+const navOrder: NavTab[] = ['ala-carte', 'weekly-schedule', 'live-orders', 'analytics', 'settings', 'ocr-upload', 'mess-management']
 
 export type NavTab =
   | 'ocr-upload'
@@ -7,8 +16,13 @@ export type NavTab =
   | 'live-orders'
   | 'analytics'
   | 'settings'
+  | 'mess-management'
 
 interface SidebarProps {
+  admin: AdminUser
+  onSignOut: () => void
+  messSection: MessSection
+  onSelectMessSection: (section: MessSection) => void
   activeTab: NavTab
   onSelectTab: (tab: NavTab) => void
   pendingOrdersCount?: number
@@ -16,17 +30,23 @@ interface SidebarProps {
 }
 
 export default function AdminSidebar({
+  admin,
+  onSignOut,
+  messSection,
+  onSelectMessSection,
   activeTab,
   onSelectTab,
   pendingOrdersCount = 6,
   isLiveService = true,
 }: SidebarProps) {
+  const [messExpanded, setMessExpanded] = useState(false)
   const navItems: {
     id: NavTab
     label: string
     icon: React.ReactNode
     badge?: string | number
   }[] = [
+    { id: 'mess-management', label: 'Mess Management', icon: <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2m20 0v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg> },
     {
       id: 'ocr-upload',
       label: 'Menu Upload (OCR)',
@@ -158,8 +178,8 @@ export default function AdminSidebar({
   return (
     <aside className="w-64 shrink-0 flex flex-col justify-between p-5 bg-[#F5F0EB] border-r border-[#E5DFD7] h-screen select-none">
       {/* Top Branding */}
-      <div>
-        <div className="flex items-center gap-3 px-3 py-2 mb-6">
+      <div className="min-h-0 flex flex-1 flex-col">
+        <div className="flex shrink-0 items-center gap-3 px-3 py-2 mb-6">
           <div className="w-10 h-10 rounded-2xl bg-[#F25C2C] flex items-center justify-center text-white shadow-md shadow-[#F25C2C]/20">
             <svg
               className="w-6 h-6"
@@ -186,7 +206,7 @@ export default function AdminSidebar({
         </div>
 
         {/* Live Status indicator card */}
-        <div className="mx-1 mb-6 px-3.5 py-2.5 rounded-2xl bg-white border border-[#E5DFD7] shadow-sm flex items-center justify-between">
+        <div className="shrink-0 mx-1 mb-6 px-3.5 py-2.5 rounded-2xl bg-white border border-[#E5DFD7] shadow-sm flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <span className="relative flex h-2.5 w-2.5">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -202,16 +222,24 @@ export default function AdminSidebar({
         </div>
 
         {/* Navigation List - Pill Shaped Links */}
-        <nav className="flex flex-col gap-1.5">
+        <nav aria-label="Admin navigation" className="min-h-0 flex flex-col gap-1.5 overflow-y-auto pb-3 no-scrollbar">
           <p className="px-3 text-[11px] font-bold uppercase tracking-wider text-stone-600 mb-1">
             Menu & Operations
           </p>
-          {navItems.map((item) => {
+          {[...navItems].sort((a, b) => navOrder.indexOf(a.id) - navOrder.indexOf(b.id)).map((item) => {
             const isActive = activeTab === item.id
             return (
+              <React.Fragment key={item.id}>
               <button
-                key={item.id}
-                onClick={() => onSelectTab(item.id)}
+                aria-current={isActive && item.id !== 'mess-management' ? 'page' : undefined}
+                aria-expanded={item.id === 'mess-management' ? messExpanded : undefined}
+                aria-controls={item.id === 'mess-management' ? 'mess-navigation' : undefined}
+                onClick={() => {
+                  if (item.id === 'mess-management') {
+                    setMessExpanded(isActive ? !messExpanded : true)
+                  }
+                  onSelectTab(item.id)
+                }}
                 className={`w-full flex items-center justify-between px-4 py-3 rounded-full text-sm font-semibold transition-all duration-200 cursor-pointer ${
                   isActive
                     ? 'bg-[#F25C2C] text-white shadow-md shadow-[#F25C2C]/25'
@@ -225,6 +253,7 @@ export default function AdminSidebar({
                   <span>{item.label}</span>
                 </div>
 
+                {item.id === 'mess-management' && <svg className={`h-4 w-4 shrink-0 transition-transform ${messExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" /></svg>}
                 {item.badge !== undefined && (
                   <span
                     className={`text-xs px-2 py-0.5 rounded-full font-bold transition-colors ${
@@ -239,32 +268,41 @@ export default function AdminSidebar({
                   </span>
                 )}
               </button>
+              {item.id === 'mess-management' && messExpanded && <div id="mess-navigation" className="ml-7 flex flex-col gap-1 border-l border-[#E5DFD7] pl-3">
+                {messSections.map(section => <button key={section.id}
+                  aria-current={isActive && messSection === section.id ? 'page' : undefined}
+                  onClick={() => onSelectMessSection(section.id)}
+                  className={`rounded-xl px-3 py-2.5 text-left text-xs font-semibold transition-colors ${isActive && messSection === section.id ? 'bg-white text-[#F25C2C] shadow-sm' : 'text-stone-600 hover:bg-white/80 hover:text-[#1D1A16]'}`}>{section.label}</button>)}
+              </div>}
+              </React.Fragment>
             )
           })}
         </nav>
       </div>
 
       {/* Admin User Profile Card at Bottom */}
-      <div className="p-3.5 rounded-2xl bg-white border border-[#E5DFD7] shadow-sm flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-stone-800 to-stone-600 text-white font-bold flex items-center justify-center text-xs shadow-inner">
-            AD
+      <div className="shrink-0 mt-3 p-3.5 rounded-2xl bg-white border border-[#E5DFD7] shadow-sm flex items-center justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="shrink-0 w-9 h-9 rounded-full bg-gradient-to-tr from-stone-800 to-stone-600 text-white font-bold flex items-center justify-center text-xs shadow-inner">
+            {admin.username.slice(0, 2).toUpperCase()}
           </div>
           <div className="min-w-0">
             <p className="text-xs font-bold text-[#1D1A16] truncate">
-              Chief Admin
+              {admin.username}
             </p>
             <p className="text-[11px] text-stone-500 truncate">
-              admin@canteen.edu
+              Administrator
             </p>
           </div>
         </div>
-        <div
-          title="Super Admin Verified"
-          className="w-6 h-6 rounded-full bg-[#F25C2C]/10 text-[#F25C2C] flex items-center justify-center text-xs font-bold"
+        <button
+          onClick={onSignOut}
+          title="Sign Out"
+          aria-label="Sign Out"
+          className="ml-2 h-8 w-8 shrink-0 rounded-full bg-[#F25C2C]/10 text-[#F25C2C] flex items-center justify-center hover:bg-[#F25C2C]/20"
         >
-          ✓
-        </div>
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H5v14h4m6-14 7 7-7 7m7-7H9" /></svg>
+        </button>
       </div>
     </aside>
   )

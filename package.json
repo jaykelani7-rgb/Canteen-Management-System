@@ -4,11 +4,17 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
-    "server": "npx tsx src/server/standalone.ts",
-    "build": "vite build",
-    "preview": "vite preview",
-    "format": "oxfmt"
+    "dev": "pnpm run admin",
+    "build": "pnpm run build:admin && pnpm run build:student",
+    "preview": "pnpm run preview:admin",
+    "format": "oxfmt",
+    "test:separation": "node scripts/check-separation.cjs --built",
+    "admin": "vite --host 0.0.0.0 --port 8443",
+    "student": "vite --config vite.student.config.ts --host 0.0.0.0 --port 5173",
+    "build:admin": "vite build",
+    "build:student": "vite build --config vite.student.config.ts",
+    "preview:admin": "vite preview --host 0.0.0.0 --port 8443",
+    "preview:student": "vite preview --config vite.student.config.ts --host 0.0.0.0 --port 5173"
   },
   "dependencies": {
     "react": "^19.0.0",

@@ -5,8 +5,6 @@ interface AdminHeaderProps {
   subtitle: string
   onQuickAction?: () => void
   actionLabel?: string
-  appMode?: 'admin' | 'mobile-preview'
-  onToggleMode?: () => void
 }
 
 export default function AdminHeader({
@@ -14,9 +12,9 @@ export default function AdminHeader({
   subtitle,
   onQuickAction,
   actionLabel = '+ Quick Action',
-  appMode = 'admin',
-  onToggleMode,
 }: AdminHeaderProps) {
+  const studentAppUrl = import.meta.env.VITE_STUDENT_APP_URL?.trim() ||
+    (import.meta.env.DEV ? `${window.location.protocol}//${window.location.hostname}:5173` : '')
   const [timeStr, setTimeStr] = useState('')
   const [dayStr, setDayStr] = useState('')
 
@@ -77,15 +75,17 @@ export default function AdminHeader({
           <span>Active Window: Lunch (12:00 - 15:00)</span>
         </div>
 
-        {/* App Switcher Mode Toggle (if student app preview is enabled) */}
-        {onToggleMode && (
-          <button
-            onClick={onToggleMode}
+        {/* The student frontend runs independently of the admin workspace. */}
+        {studentAppUrl && (
+          <a
+            href={studentAppUrl}
+            target="_blank"
+            rel="noopener noreferrer"
             className="px-3.5 py-2 rounded-full bg-white hover:bg-stone-100 text-stone-700 border border-[#E5DFD7] text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shadow-sm"
           >
             <span>📱</span>
-            <span>{appMode === 'admin' ? 'View Student App' : 'Back to Admin'}</span>
-          </button>
+            <span>Open Student App</span>
+          </a>
         )}
 
         {/* Primary Action Button */}

@@ -1,0 +1,8 @@
+# Optional frontend settings shared by the admin and student applications.
+# Both apps proxy /api to this one existing FastAPI service.
+FASTAPI_URL=http://127.0.0.1:8000
+# Optional separately hosted API origin, without /api suffix:
+# VITE_API_BASE_URL=https://api.example.edu
+# Optional LAN HTTPS; the certificate must be trusted by the phone:
+# HTTPS_KEY_FILE=C:/certificates/canteen-key.pem
+# HTTPS_CERT_FILE=C:/certificates/canteen-cert.pem

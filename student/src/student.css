@@ -1,0 +1,8 @@
+/* The student frontend uses the existing palette, typography and controls. */
+html, body, #root { min-height: 100%; width: 100%; }
+body { background: var(--color-paper); overscroll-behavior-y: none; }
+.student-shell { max-width: 640px; }
+.student-shell nav { padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+.student-shell > div { padding-top: env(safe-area-inset-top); }
+.student-shell input, .student-shell select { font-size: max(16px, 1em); }
+@media (min-width: 641px) { .student-shell { box-shadow: 0 0 48px rgba(29, 26, 22, 0.08); } }

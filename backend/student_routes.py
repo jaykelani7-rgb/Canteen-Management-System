@@ -23,7 +23,6 @@ from models import (
     MealType,
     Notification,
     Order,
-    OrderStatusEnum,
     PasswordResetOtp,
     PaymentStatusEnum,
     StudentUser,
@@ -41,7 +40,6 @@ from schemas import (
     NotificationResponse,
     OrderResponse,
     OrderReviewCreate,
-    OrderStatusUpdateRequest,
     OrderTrackingResponse,
     OtpResponse,
     ResetPasscodeRequest,
@@ -1004,55 +1002,6 @@ async def mark_order_picked_up(
 
     order.order_status = "Completed"
     order.completed_at = datetime.now(timezone.utc)
-
-    await db.commit()
-    await db.refresh(order)
-
-    return order.to_dict()
-
-
-@student_router.post(
-    "/student/orders/{order_id}/status",
-    response_model=OrderResponse,
-    summary="Simulate / Update Order Status (For Testing & Counter)",
-)
-async def update_order_status(
-    order_id: int,
-    payload: OrderStatusUpdateRequest,
-    student: StudentUser = Depends(get_current_student),
-    db: AsyncSession = Depends(get_db),
-):
-    """Update order status to 'Preparing', 'Ready', 'Completed', or 'Cancelled'."""
-    stmt = select(Order).where(Order.id == order_id)
-    res = await db.execute(stmt)
-    order = res.scalar_one_or_none()
-
-    if not order:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Order #{order_id} not found.",
-        )
-
-    order.order_status = payload.status.value
-    reason = getattr(payload, "cancellationReason", None) or getattr(payload, "cancellation_reason", None)
-    if reason:
-        order.cancellation_reason = reason
-
-    if payload.status == OrderStatusEnum.READY:
-        order.ready_at = datetime.now(timezone.utc)
-        # Create Ready notification
-        note = Notification(
-            student_id=order.student_id,
-            title=f"Your food is ready! 🔔",
-            body=f"Order {order.order_number} is hot & ready! Pick up at Counter 2.",
-            notification_type="order_update",
-            emoji="🔔",
-            color_theme="mint",
-            order_id=order.id,
-        )
-        db.add(note)
-    elif payload.status == OrderStatusEnum.COMPLETED:
-        order.completed_at = datetime.now(timezone.utc)
 
     await db.commit()
     await db.refresh(order)

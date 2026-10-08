@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 from auth import get_password_hash
+from mess_seed import seed_mess
 from database import AsyncSessionLocal, init_db
 from models import (
     AlaCarte,
@@ -580,6 +581,7 @@ async def seed():
                 session.add(review)
 
         await session.commit()
+        await seed_mess(session)
         print("✅ Database successfully seeded with full weekly schedule, food catalogue, student accounts, orders, and notifications!")
 
 

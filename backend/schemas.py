@@ -412,3 +412,67 @@ class FeedbackResponse(BaseModel):
     comment: str
     tags: List[str]
     createdAt: Optional[str] = None
+
+
+# Mess staff input. Balances and audit fields are always server-owned.
+from datetime import date
+from decimal import Decimal
+from typing import Literal
+from pydantic import model_validator, field_validator
+
+
+class MessSubscriptionInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    student_name: str = Field(min_length=2, max_length=100)
+    roll_number: str = Field(min_length=3, max_length=30)
+    year: str = Field(min_length=1, max_length=30)
+    branch: str = Field(min_length=1, max_length=100)
+    mobile_number: str = Field(min_length=8, max_length=30)
+    plan_type: Literal["single", "double"]
+    amount_paid: Optional[Decimal] = Field(default=None, ge=0, max_digits=10, decimal_places=2)
+    total_tokens: Optional[int] = Field(default=None, gt=0, le=10000)
+    start_date: date
+    end_date: Optional[date] = None
+    payment_method: str = Field(min_length=1, max_length=30)
+    payment_reference: Optional[str] = Field(default=None, max_length=100)
+    notes: Optional[str] = Field(default=None, max_length=2000)
+
+    @field_validator("roll_number")
+    @classmethod
+    def normalize_roll(cls, value):
+        value = value.upper().replace(" ", "")
+        if len(value) < 3:
+            raise ValueError("Roll number must contain at least three characters")
+        return value
+
+    @model_validator(mode="after")
+    def dates_in_order(self):
+        if self.end_date and self.end_date < self.start_date:
+            raise ValueError("End date must be on or after start date")
+        return self
+
+
+class MessSubscriptionUpdate(MessSubscriptionInput):
+    status: Literal["Active", "Cancelled"] = "Active"
+
+
+class MessMarkInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    subscription_id: int = Field(gt=0)
+    meal_date: date
+    # The ledger retains other meal types for history and future expansion.
+    meal_type: Literal["Lunch", "Dinner"]
+
+
+class MessUndoInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class MessPlanUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: str = Field(min_length=2, max_length=60)
+    amount: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
+    tokens: int = Field(gt=0, le=10000)
+    duration_days: int = Field(gt=0, le=366)
+    is_active: bool = True

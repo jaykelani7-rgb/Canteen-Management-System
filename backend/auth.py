@@ -151,6 +151,12 @@ async def get_current_student(
     token = credentials.credentials
     token_data = decode_access_token(token)
 
+    if token_data.role != "student":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A student session is required",
+        )
+
     # Query DB to verify active student user by id or roll_number
     result = await db.execute(
         select(StudentUser).where(
@@ -192,6 +198,8 @@ async def get_optional_student(
     try:
         token = credentials.credentials
         token_data = decode_access_token(token)
+        if token_data.role != "student":
+            return None
         result = await db.execute(
             select(StudentUser).where(
                 or_(

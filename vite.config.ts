@@ -1,26 +1,29 @@
-import { defineConfig, type HtmlTagDescriptor, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type HtmlTagDescriptor, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'node:path'
 
 import siteConfiguration from './.figma/make/site.json'
-import { authApiPlugin } from './src/server/apiPlugin'
+import { readFileSync } from 'node:fs'
 
-// Vite config — https://vitejs.dev/config/
+// Vite configuration: https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const proxy = { '/api': { target: env.FASTAPI_URL || 'http://127.0.0.1:8000', changeOrigin: true } }
+  const https = env.HTTPS_KEY_FILE && env.HTTPS_CERT_FILE ? { key: readFileSync(env.HTTPS_KEY_FILE), cert: readFileSync(env.HTTPS_CERT_FILE) } : undefined
   // .figma/make/deploy-preview passes `--mode development` for cached-preview builds.
   const emitSourcemaps = mode === 'development'
 
   return {
     base: process.env.FIGMA_PUBLIC_URL ? `${process.env.FIGMA_PUBLIC_URL}/` : '/',
     build: {
+      outDir: 'dist/admin',
       sourcemap: emitSourcemaps ? 'inline' : false,
       minify: !emitSourcemaps,
     },
     plugins: [
       react(),
       tailwindcss(),
-      authApiPlugin(),
       figmaSiteConfiguration(siteConfiguration),
       figmaErrorOverlayReplay(),
       figmaReactRefreshBoundaryFallback(),
@@ -35,9 +38,14 @@ export default defineConfig(({ mode }) => {
       host: '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
       strictPort: true,
-      watch: { ignored: ['**/.figma/**'] },
+      proxy,
+      https,
+      watch: { ignored: ['**/.figma/**', '**/backend/**', '**/student/**', '**/dist/**'] },
     },
     preview: {
+      proxy,
+      https,
+      strictPort: true,
       host: '0.0.0.0',
       port: parseInt(process.env.PORT || '8443'),
     },

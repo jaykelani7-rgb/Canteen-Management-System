@@ -1,20 +1,80 @@
+import os
 import uuid
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.schema import CreateSchema, DropSchema
 
 from main import app
+from auth import create_access_token, get_password_hash
+from database import Base, get_db
+from models import AdminUser
+import mess_routes
+import routes
+import seed_data
+import student_routes
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="module")
 async def client():
-    """Session-scoped AsyncClient for super fast test execution on shared event loop."""
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
+    """Exercise student regressions without changing the application's data."""
+    url = os.getenv("MESS_TEST_DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+    postgres = url.startswith("postgresql")
+    schema = "student_test_" + uuid.uuid4().hex
+    admin_engine = create_async_engine(url)
+    if postgres:
+        async with admin_engine.begin() as connection:
+            await connection.execute(CreateSchema(schema))
+        engine = create_async_engine(url, connect_args={"server_settings": {"search_path": schema}, "statement_cache_size": 0})
+    else:
+        engine = admin_engine
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    patches = pytest.MonkeyPatch()
+
+    async def initialize_schema():
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.create_all)
+
+    async def no_cache(*args, **kwargs):
+        return None
+
+    async def override_db():
+        async with sessions() as session:
+            try:
+                yield session
+            except Exception:
+                await session.rollback()
+                raise
+
+    previous_override = app.dependency_overrides.get(get_db)
+    try:
+        patches.setattr(seed_data, "AsyncSessionLocal", sessions)
+        patches.setattr(seed_data, "init_db", initialize_schema)
+        for module in (routes, student_routes, mess_routes):
+            for name in ("cache_get", "cache_set", "cache_invalidate_prefix"):
+                patches.setattr(module, name, no_cache)
+        await seed_data.seed()
+        async with sessions() as session:
+            session.add(AdminUser(username="regression-admin", hashed_password=get_password_hash("test-only-password"), role="admin", is_active=True))
+            await session.commit()
+        app.dependency_overrides[get_db] = override_db
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            yield ac
+    finally:
+        if previous_override is None:
+            app.dependency_overrides.pop(get_db, None)
+        else:
+            app.dependency_overrides[get_db] = previous_override
+        patches.undo()
+        await engine.dispose()
+        if postgres:
+            async with admin_engine.begin() as connection:
+                await connection.execute(DropSchema(schema, cascade=True))
+            await admin_engine.dispose()
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="module")
 async def auth_headers(client: AsyncClient):
     """Provides valid JWT Bearer authentication headers for test student Aarav."""
     login_resp = await client.post(
@@ -419,7 +479,7 @@ async def test_order_cancellation_and_auto_refund(client: AsyncClient, auth_head
 
 
 # =========================================================================
-# 9. ORDER STATUS SIMULATION & PICKUP COMPLETION
+# 9. ADMIN ORDER STATUS & STUDENT PICKUP COMPLETION
 # =========================================================================
 @pytest.mark.asyncio
 async def test_order_status_progression_and_pickup(client: AsyncClient, auth_headers: dict):
@@ -433,9 +493,9 @@ async def test_order_status_progression_and_pickup(client: AsyncClient, auth_hea
 
     # 1. Update status to Ready
     ready_resp = await client.post(
-        f"/api/student/orders/{order_id}/status",
+        f"/api/admin/orders/{order_id}/status",
         json={"status": "Ready"},
-        headers=auth_headers,
+        headers={"Authorization": "Bearer " + create_access_token({"sub": "regression-admin", "role": "admin"})},
     )
     assert ready_resp.status_code == 200
     assert ready_resp.json()["status"] == "Ready"

@@ -1,4 +1,4 @@
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete, select
@@ -18,10 +18,12 @@ from database import (
     cache_set,
     get_db,
 )
-from models import AdminUser, AlaCarte, DayOfWeek, MealType, WeeklyMenu
+from models import AdminUser, AlaCarte, DayOfWeek, MealType, WeeklyMenu, Order, OrderStatusEnum, Notification
 from schemas import (
     AdminLoginRequest,
     AdminUserResponse,
+    OrderResponse,
+    OrderStatusUpdateRequest,
     AlaCarteCreate,
     AlaCarteResponse,
     AlaCarteUpdate,
@@ -129,6 +131,7 @@ def is_time_in_window(current_time: time, window_str: str) -> bool:
 # =========================================================================
 # 1. AUTHENTICATION ROUTES
 # =========================================================================
+@admin_router.post("/login", response_model=Token, summary="Admin JWT login")
 @auth_router.post(
     "/login",
     response_model=Token,
@@ -168,6 +171,50 @@ async def login(
         expires_in_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES,
         role=user.role,
     )
+
+
+@admin_router.get("/me", response_model=AdminUserResponse, summary="Get the authenticated administrator")
+async def get_admin_profile(admin: AdminUser = Depends(get_current_admin)):
+    return admin
+
+
+@admin_router.post(
+    "/orders/{order_id}/status",
+    response_model=OrderResponse,
+    summary="Update Order Status (Admin Only)",
+)
+async def update_order_status(
+    order_id: int,
+    payload: OrderStatusUpdateRequest,
+    admin: AdminUser = Depends(get_current_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Preserve counter status behavior while requiring an active administrator."""
+    result = await db.execute(select(Order).where(Order.id == order_id))
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Order #{order_id} not found.")
+
+    order.order_status = payload.status.value
+    reason = payload.cancellationReason or payload.cancellation_reason
+    if reason:
+        order.cancellation_reason = reason
+    if payload.status == OrderStatusEnum.READY:
+        order.ready_at = datetime.now(timezone.utc)
+        db.add(Notification(
+            student_id=order.student_id,
+            title="Your food is ready! 🔔",
+            body=f"Order {order.order_number} is hot & ready! Pick up at Counter 2.",
+            notification_type="order_update",
+            emoji="🔔",
+            color_theme="mint",
+            order_id=order.id,
+        ))
+    elif payload.status == OrderStatusEnum.COMPLETED:
+        order.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(order)
+    return order.to_dict()
 
 
 # =========================================================================

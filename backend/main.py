@@ -10,6 +10,7 @@ from models import AdminUser, FoodItem, StudentUser
 from routes import admin_router, auth_router, menu_router
 from ocr_router import ocr_router
 from student_routes import student_router
+from mess_routes import mess_router, initialize_mess_plans
 
 
 SAMPLE_DEMO_STUDENTS = [
@@ -229,6 +230,7 @@ async def lifespan(app: FastAPI):
     # 1. Initialize PostgreSQL Tables
     try:
         await init_db()
+        await initialize_mess_plans()
         print("✅ PostgreSQL Database Schema initialized successfully.")
     except Exception as e:
         print(f"❌ Database initialization failed: {e}")
@@ -359,15 +361,16 @@ High-Performance Canteen & Mess Management API built with **FastAPI**, **Postgre
 # -------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # -------------------------------------------------------------------------
 # Register Modular APIRouters
 # -------------------------------------------------------------------------
+app.include_router(mess_router, prefix=settings.API_V1_STR)
 app.include_router(student_router, prefix=settings.API_V1_STR)
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(menu_router, prefix=settings.API_V1_STR)
@@ -394,7 +397,8 @@ async def root():
             "today_menu": "/api/menu/today",
             "weekly_menu": "/api/menu/weekly",
             "ala_carte": "/api/menu/ala-carte",
-            "admin_login": "/api/auth/login",
+            "admin_login": "/api/admin/login",
+            "admin_session": "/api/admin/me",
             "admin_upload_weekly": "/api/admin/menu/weekly",
         },
     }
