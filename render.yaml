@@ -1,0 +1,61 @@
+# Free staging only. This file does not create anything until the owner applies it.
+# Publish the complete reviewed source to krishna before connecting Render.
+# https://render.com/docs/blueprint-spec
+previews:
+  generation: "off"
+services:
+  - type: web
+    name: canteen-staging-api
+    runtime: docker
+    plan: free
+    region: singapore
+    repo: https://github.com/jaykelani7-rgb/Canteen-Management-System
+    branch: krishna
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    autoDeployTrigger: "off"
+    healthCheckPath: /api/health
+    # Keep the repository root; Dockerfile COPY instructions use backend/ paths.
+    # Inherit CMD ["python", "start_server.py"]. No migration/seed hooks.
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: DATABASE_POOL_SIZE
+        value: "2"
+      - key: DATABASE_MAX_OVERFLOW
+        value: "3"
+      - key: PGSSLROOTCERT
+        value: /etc/ssl/certs/ca-certificates.crt
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: TRUSTED_HOSTS
+        sync: false
+      - key: CORS_ORIGINS
+        value: '["https://localhost"]'
+      - key: STUDENT_CORS_ORIGINS
+        value: '[]'
+      - key: ADMIN_CORS_ORIGINS
+        value: '[]'
+      - key: SESSION_COOKIE_MODE_ENABLED
+        value: "false"
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      - key: AUTO_CREATE_SCHEMA
+        value: "false"
+      - key: ENABLE_DEMO_DATA
+        value: "false"
+      - key: PAYMENT_PROVIDER
+        value: disabled
+      - key: PASSCODE_RECOVERY_ENABLED
+        value: "false"
+    # Add actual separate Pages origins to CORS and role arrays before web launch.
+    # Update CORS through the dashboard; update this Blueprint before later syncs.
+    # Neon PostgreSQL and Upstash Redis are created separately on their FREE plans.

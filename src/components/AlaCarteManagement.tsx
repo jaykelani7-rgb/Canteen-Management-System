@@ -1,15 +1,17 @@
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import { adminOperationsApi, type CatalogueItem } from '../lib/adminOperationsApi'
 
 export interface AlaCarteItem {
-  id: number
+  id: string
   item_name: string
   category: 'Snacks' | 'Meals' | 'Beverages' | 'Desserts' | 'Quick Bites'
   price: number
   timing_window: string
   is_available: boolean
   veg: boolean
-  orders_today: number
+  orders_today: number | null
   prep_time_mins: number
+  source: CatalogueItem
   emoji?: string
 }
 
@@ -17,112 +19,38 @@ interface AlaCarteManagementProps {
   onShowToast?: (title: string, description?: string, type?: 'success' | 'info' | 'warning' | 'error') => void
 }
 
-const INITIAL_ITEMS: AlaCarteItem[] = [
-  {
-    id: 1,
-    item_name: 'Paneer Butter Masala (Single)',
-    category: 'Meals',
-    price: 160.0,
-    timing_window: '12:00-22:30',
-    is_available: true,
-    veg: true,
-    orders_today: 42,
-    prep_time_mins: 15,
-    emoji: '🍛',
-  },
-  {
-    id: 2,
-    item_name: 'Crispy Peri-Peri French Fries',
-    category: 'Snacks',
-    price: 85.0,
-    timing_window: 'all_day',
-    is_available: true,
-    veg: true,
-    orders_today: 78,
-    prep_time_mins: 8,
-    emoji: '🍟',
-  },
-  {
-    id: 3,
-    item_name: 'Chicken Tikka Roll (Double Egg)',
-    category: 'Quick Bites',
-    price: 150.0,
-    timing_window: '12:00-22:00',
-    is_available: true,
-    veg: false,
-    orders_today: 56,
-    prep_time_mins: 12,
-    emoji: '🌯',
-  },
-  {
-    id: 4,
-    item_name: 'Veg Cheese Grill Sandwich',
-    category: 'Snacks',
-    price: 110.0,
-    timing_window: '08:00-22:00',
-    is_available: true,
-    veg: true,
-    orders_today: 34,
-    prep_time_mins: 10,
-    emoji: '🥪',
-  },
-  {
-    id: 5,
-    item_name: 'Cold Coffee with Vanilla Ice Cream',
-    category: 'Beverages',
-    price: 75.0,
-    timing_window: 'all_day',
-    is_available: true,
-    veg: true,
-    orders_today: 92,
-    prep_time_mins: 5,
-    emoji: '🥤',
-  },
-  {
-    id: 6,
-    item_name: 'Double Masala Cheese Maggi',
-    category: 'Quick Bites',
-    price: 65.0,
-    timing_window: 'all_day',
-    is_available: false,
-    veg: true,
-    orders_today: 19,
-    prep_time_mins: 7,
-    emoji: '🍜',
-  },
-  {
-    id: 7,
-    item_name: 'Fresh Mosambi Orange Juice',
-    category: 'Beverages',
-    price: 60.0,
-    timing_window: '08:00-18:00',
-    is_available: true,
-    veg: true,
-    orders_today: 28,
-    prep_time_mins: 4,
-    emoji: '🍊',
-  },
-  {
-    id: 8,
-    item_name: 'Warm Choco Lava Cake',
-    category: 'Desserts',
-    price: 90.0,
-    timing_window: '12:00-22:30',
-    is_available: false,
-    veg: true,
-    orders_today: 12,
-    prep_time_mins: 5,
-    emoji: '🧁',
-  },
-]
+function toInventoryItem(item: CatalogueItem): AlaCarteItem {
+  return { id: item.id, item_name: item.name, category: item.category, price: item.price, timing_window: item.timingWindow,
+    is_available: item.available, veg: item.veg, orders_today: item.ordersToday ?? null, prep_time_mins: item.prepMins, emoji: item.emoji, source: item }
+}
 
 export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementProps) {
-  const [items, setItems] = useState<AlaCarteItem[]>(INITIAL_ITEMS)
+  const [items, setItems] = useState<AlaCarteItem[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('All')
   const [selectedTimingFilter, setSelectedTimingFilter] = useState<string>('all')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingItem, setEditingItem] = useState<AlaCarteItem | null>(null)
+
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const mutationLock = useRef(false)
+  const [formDescription, setFormDescription] = useState('')
+  const [formPrep, setFormPrep] = useState('10')
+  useEffect(() => {
+    let active = true
+    adminOperationsApi.catalogue().then(rows => { if (active) setItems(rows.map(toInventoryItem)) })
+      .catch(cause => { if (active) setError((cause as Error).message) }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+  const mutate = async (action: () => Promise<void>) => {
+    if (mutationLock.current) return
+    mutationLock.current = true; setBusy(true); setError('')
+    try { await action() }
+    catch (cause) { setError((cause as Error).message); onShowToast?.('Catalogue update failed', (cause as Error).message, 'error') }
+    finally { mutationLock.current = false; setBusy(false) }
+  }
 
   // New Item Form State
   const [formName, setFormName] = useState('')
@@ -132,25 +60,19 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
   const [formVeg, setFormVeg] = useState(true)
   const [formAvailable, setFormAvailable] = useState(true)
 
-  // Toggle item availability with modern pill switch
-  const handleToggleAvailability = (id: number) => {
-    setItems((prev) =>
-      prev.map((item) => {
-        if (item.id === id) {
-          const nextState = !item.is_available
-          onShowToast?.(
-            nextState ? 'Item is Now Available' : 'Item Marked Sold Out',
-            `"${item.item_name}" status updated in real-time. Students will see immediate change.`,
-            nextState ? 'success' : 'warning'
-          )
-          return { ...item, is_available: nextState }
-        }
-        return item
-      })
-    )
+  const handleToggleAvailability = (id: string) => {
+    const item = items.find(row => row.id === id)
+    if (!item) return
+    void mutate(async () => {
+      const updated = await adminOperationsApi.availability(id, !item.is_available)
+      setItems(prev => prev.map(row => row.id === id ? toInventoryItem(updated) : row))
+      onShowToast?.(updated.available ? 'Item is Now Available' : 'Item Marked Sold Out', updated.name + ' availability saved.', 'success')
+    })
   }
 
   const handleOpenAddModal = () => {
+    if (loading || busy) return
+    setFormDescription(''); setFormPrep('10')
     setEditingItem(null)
     setFormName('')
     setFormCategory('Snacks')
@@ -162,6 +84,8 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
   }
 
   const handleOpenEditModal = (item: AlaCarteItem) => {
+    if (busy) return
+    setFormDescription(item.source.desc); setFormPrep(String(item.prep_time_mins))
     setEditingItem(item)
     setFormName(item.item_name)
     setFormCategory(item.category)
@@ -175,50 +99,27 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
   const handleSaveItem = (e: React.FormEvent) => {
     e.preventDefault()
     if (!formName.trim()) return
-
-    const priceNum = parseFloat(formPrice) || 0
-
-    if (editingItem) {
-      setItems((prev) =>
-        prev.map((item) =>
-          item.id === editingItem.id
-            ? {
-                ...item,
-                item_name: formName.trim(),
-                category: formCategory,
-                price: priceNum,
-                timing_window: formTiming,
-                veg: formVeg,
-                is_available: formAvailable,
-              }
-            : item
-        )
-      )
-      onShowToast?.('Item Updated', `"${formName}" has been successfully modified.`, 'success')
-    } else {
-      const newItem: AlaCarteItem = {
-        id: Date.now(),
-        item_name: formName.trim(),
-        category: formCategory,
-        price: priceNum,
-        timing_window: formTiming,
-        is_available: formAvailable,
-        veg: formVeg,
-        orders_today: 0,
-        prep_time_mins: 10,
-        emoji: formCategory === 'Beverages' ? '🥤' : formCategory === 'Desserts' ? '🧁' : '🍽️',
-      }
-      setItems((prev) => [newItem, ...prev])
-      onShowToast?.('New Item Added', `"${formName}" added to A La Carte catalog.`, 'success')
-    }
-    setIsModalOpen(false)
+    const price = Number(formPrice), prepMins = Number(formPrep)
+    if (!Number.isFinite(price) || price <= 0 || !Number.isInteger(prepMins) || prepMins < 1) { setError('Enter a positive price and preparation time.'); return }
+    void mutate(async () => {
+      const payload = { name: formName.trim(), desc: formDescription.trim(), category: formCategory, price,
+        timingWindow: formTiming, veg: formVeg, available: formAvailable, prepMins,
+        emoji: editingItem?.source.emoji || (formCategory === 'Beverages' ? '🥤' : formCategory === 'Desserts' ? '🧁' : '🍽️'),
+        photo: editingItem?.source.photo || '', customizations: editingItem?.source.customizations || [] }
+      const saved = editingItem ? await adminOperationsApi.updateItem(editingItem.id, payload) : await adminOperationsApi.createItem(payload)
+      setItems(prev => editingItem ? prev.map(row => row.id === saved.id ? toInventoryItem(saved) : row) : [toInventoryItem(saved), ...prev])
+      setIsModalOpen(false)
+      onShowToast?.(editingItem ? 'Item Updated' : 'New Item Added', saved.name + ' saved to the student catalogue.', 'success')
+    })
   }
-
-  const handleDeleteItem = (id: number, name: string) => {
-    if (confirm(`Are you sure you want to remove "${name}" from A La Carte?`)) {
-      setItems((prev) => prev.filter((item) => item.id !== id))
-      onShowToast?.('Item Removed', `"${name}" was deleted from inventory.`, 'info')
-    }
+  const handleDeleteItem = (id: string, name: string) => {
+    if (busy || !confirm('Disable "' + name + '" in the student catalogue? Existing order history will be preserved.')) return
+    void mutate(async () => {
+      await adminOperationsApi.removeItem(id)
+      const rows = await adminOperationsApi.catalogue()
+      setItems(rows.map(toInventoryItem))
+      onShowToast?.('Item Disabled', name + ' is no longer available for ordering.', 'info')
+    })
   }
 
   // Filter Items
@@ -236,7 +137,9 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
   const soldOutCount = items.length - availableCount
 
   return (
-    <div className="space-y-8 max-w-6xl mx-auto">
+    <div className="space-y-8 max-w-6xl mx-auto" aria-busy={busy || loading}>
+      {loading && <p role="status" className="text-sm text-stone-500">Loading student catalogue…</p>}
+      {error && <p role="alert" className="rounded-2xl border border-red-200 bg-white p-4 text-sm text-red-700">{error}</p>}
       {/* Top Stat Cards & Info */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <div className="p-6 rounded-3xl bg-white border border-[#E5DFD7] shadow-sm flex items-center justify-between">
@@ -312,6 +215,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
         <div className="flex items-center gap-3">
           <button
             onClick={handleOpenAddModal}
+          disabled={busy || loading}
             className="px-6 py-2.5 rounded-full bg-[#F25C2C] hover:bg-[#d84e20] text-white text-xs font-bold transition-all shadow-md shadow-[#F25C2C]/25 active:scale-95 cursor-pointer flex items-center gap-2"
           >
             <svg
@@ -440,7 +344,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
 
                       {/* Orders */}
                       <td className="py-5 px-6 font-mono text-xs text-stone-600">
-                        {item.orders_today} orders
+                        {item.orders_today ?? '—'} orders
                       </td>
 
                       {/* Modern Pill-Shaped Toggle Switch (Orange when active) */}
@@ -451,6 +355,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
                             role="switch"
                             aria-checked={item.is_available}
                             onClick={() => handleToggleAvailability(item.id)}
+                      disabled={busy}
                             className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full p-0.5 transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#F25C2C]/20 shadow-inner ${
                               item.is_available ? 'bg-[#F25C2C]' : 'bg-stone-300'
                             }`}
@@ -476,6 +381,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
                         <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => handleOpenEditModal(item)}
+                        disabled={busy}
                             className="p-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 transition-colors cursor-pointer"
                             title="Edit Item"
                           >
@@ -495,6 +401,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
                           </button>
                           <button
                             onClick={() => handleDeleteItem(item.id, item.item_name)}
+                        disabled={busy}
                             className="p-2 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-600 transition-colors cursor-pointer"
                             title="Delete Item"
                           >
@@ -543,7 +450,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
                 </p>
               </div>
               <button
-                onClick={() => setIsModalOpen(false)}
+                onClick={() => { if (!busy) setIsModalOpen(false) }}
                 className="w-8 h-8 rounded-full bg-stone-100 hover:bg-stone-200 text-stone-600 flex items-center justify-center text-xs font-bold cursor-pointer"
               >
                 ✕
@@ -551,6 +458,12 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
             </div>
 
             <form onSubmit={handleSaveItem} className="space-y-4">
+              {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <label className="text-xs font-bold text-stone-700">Description<input value={formDescription} onChange={e => setFormDescription(e.target.value)} className="mt-1 w-full rounded-xl border border-[#E5DFD7] bg-[#FAF7F3] p-3 text-sm font-normal" /></label>
+                <label className="text-xs font-bold text-stone-700">Preparation (minutes)<input type="number" min="1" max="120" required value={formPrep} onChange={e => setFormPrep(e.target.value)} className="mt-1 w-full rounded-xl border border-[#E5DFD7] bg-[#FAF7F3] p-3 text-sm font-normal" /></label>
+              </div>
+
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-stone-600 mb-1.5">
                   Item Name
@@ -659,16 +572,16 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#E5DFD7]">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
+                  onClick={() => { if (!busy) setIsModalOpen(false) }}
                   className="px-5 py-2.5 rounded-full bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
-                  type="submit"
+                  type="submit" disabled={busy}
                   className="px-6 py-2.5 rounded-full bg-[#F25C2C] hover:bg-[#d84e20] text-white text-xs font-bold transition-all shadow-md shadow-[#F25C2C]/25 cursor-pointer"
                 >
-                  {editingItem ? 'Update Dish' : 'Save Dish'}
+                  {busy ? 'Saving…' : editingItem ? 'Update Dish' : 'Save Dish'}
                 </button>
               </div>
             </form>

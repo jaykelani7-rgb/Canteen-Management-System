@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { AdminApiError, adminLogin, adminLogout, getAdminMe, getAdminToken, onAdminSessionEnded, type AdminUser } from '../lib/adminApi'
+import { AdminApiError, adminLogin, adminLogout, getAdminMe, getAdminToken, hasAdminSession, onAdminSessionEnded, type AdminUser } from '../lib/adminApi'
 import AdminSignIn from './AdminSignIn'
 
 interface Props { children: (session: { admin: AdminUser; onSignOut: () => void }) => ReactNode }
@@ -15,8 +15,7 @@ export default function AdminAuthGate({ children }: Props) {
 
   const checkSession = useCallback(async () => {
     const id = ++requestId.current
-    if (!getAdminToken()) { setAdmin(null); setChecking(false); return }
-    setChecking(true)
+    if (!hasAdminSession()) { setAdmin(null); setChecking(false); return }
     setError('')
     try {
       const current = await getAdminMe()
@@ -38,11 +37,13 @@ export default function AdminAuthGate({ children }: Props) {
       setError(message)
     })
     void checkSession()
-    const revalidate = () => { if (getAdminToken() && !signingIn.current && document.visibilityState === 'visible') void checkSession() }
+    const revalidate = () => { if (hasAdminSession() && !signingIn.current && document.visibilityState === 'visible') void checkSession() }
     window.addEventListener('focus', revalidate)
     document.addEventListener('visibilitychange', revalidate)
+    const interval = setInterval(revalidate, 60000)
     return () => {
       requestId.current++
+      clearInterval(interval)
       unsubscribe()
       window.removeEventListener('focus', revalidate)
       document.removeEventListener('visibilitychange', revalidate)
@@ -86,5 +87,5 @@ export default function AdminAuthGate({ children }: Props) {
 
   if (checking) return <div className="min-h-screen bg-[#F5F0EB] flex items-center justify-center p-6 text-[#1D1A16] font-sans"><div role="status" className="rounded-3xl border border-[#E5DFD7] bg-white p-8 text-center shadow-sm"><div className="mx-auto mb-4 h-7 w-7 animate-spin rounded-full border-2 border-[#E5DFD7] border-t-[#F25C2C]" /><p className="font-semibold">Opening Smart Canteen</p><p className="mt-2 text-sm text-[#7D756D]">Checking your admin session…</p></div></div>
   if (admin) return <>{children({ admin, onSignOut: adminLogout })}</>
-  return <AdminSignIn onSignIn={signIn} busy={busy} error={error} onRetry={unavailable && getAdminToken() ? checkSession : undefined} />
+  return <AdminSignIn onSignIn={signIn} busy={busy} error={error} onRetry={unavailable && hasAdminSession() ? checkSession : undefined} />
 }

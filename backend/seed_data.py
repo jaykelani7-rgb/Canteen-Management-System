@@ -18,6 +18,7 @@ from sqlalchemy import select
 from auth import get_password_hash
 from mess_seed import seed_mess
 from database import AsyncSessionLocal, init_db
+from config import settings
 from models import (
     AlaCarte,
     FeedbackReview,
@@ -393,6 +394,10 @@ SAMPLE_DEMO_STUDENTS = [
 
 
 async def seed():
+    if getattr(settings, "ENVIRONMENT", "development") == "production":
+        raise RuntimeError("Demo seeding is disabled in production")
+    if not getattr(settings, "ENABLE_DEMO_DATA", False):
+        raise RuntimeError("Demo seeding requires explicit ENABLE_DEMO_DATA=true in development/test")
     print("🌱 Initializing Database Schema...")
     await init_db()
 
@@ -407,9 +412,7 @@ async def seed():
             result = await session.execute(stmt)
             existing = result.scalar_one_or_none()
 
-            if existing:
-                existing.items = item["items"]
-            else:
+            if not existing:
                 session.add(WeeklyMenu(**item))
 
         # 2. A La Carte Items
@@ -419,11 +422,7 @@ async def seed():
             result = await session.execute(stmt)
             existing = result.scalar_one_or_none()
 
-            if existing:
-                existing.price = item["price"]
-                existing.timing_window = item["timing_window"]
-                existing.is_available = item["is_available"]
-            else:
+            if not existing:
                 session.add(AlaCarte(**item))
 
         # 3. Rich Food Items Catalogue
@@ -433,20 +432,7 @@ async def seed():
             result = await session.execute(stmt)
             existing = result.scalar_one_or_none()
 
-            if existing:
-                existing.price = item["price"]
-                existing.name = item["name"]
-                existing.desc = item["desc"]
-                existing.category = item["category"]
-                existing.veg = item["veg"]
-                existing.is_available = item["is_available"]
-                existing.prep_mins = item["prep_mins"]
-                existing.rating = item["rating"]
-                existing.tag = item.get("tag")
-                existing.emoji = item["emoji"]
-                existing.photo = item["photo"]
-                existing.customizations = item["customizations"]
-            else:
+            if not existing:
                 session.add(FoodItem(**item, timing_window="all_day"))
 
         # 4. Student Accounts

@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.schema import CreateSchema, DropSchema
 
 from main import app
-from auth import create_access_token, get_password_hash
+from auth import create_access_token, get_password_hash, credential_fingerprint
+from config import settings
+import main
 from database import Base, get_db
 from models import AdminUser
 import mess_routes
@@ -49,6 +51,14 @@ async def client():
 
     previous_override = app.dependency_overrides.get(get_db)
     try:
+        patches.setattr(settings, "ENVIRONMENT", "test")
+        patches.setattr(settings, "ENABLE_DEMO_DATA", True)
+        patches.setattr(settings, "RATE_LIMIT_ENABLED", False)
+        patches.setattr(settings, "PAYMENT_PROVIDER", "disabled")
+        patches.setattr(main, "engine", engine)
+        class HealthyRedis:
+            async def ping(self): return True
+        patches.setattr(main, "get_redis_client", lambda: HealthyRedis())
         patches.setattr(seed_data, "AsyncSessionLocal", sessions)
         patches.setattr(seed_data, "init_db", initialize_schema)
         for module in (routes, student_routes, mess_routes):
@@ -56,10 +66,12 @@ async def client():
                 patches.setattr(module, name, no_cache)
         await seed_data.seed()
         async with sessions() as session:
-            session.add(AdminUser(username="regression-admin", hashed_password=get_password_hash("test-only-password"), role="admin", is_active=True))
+            admin_hash = get_password_hash("test-only-password")
+            session.add(AdminUser(username="regression-admin", hashed_password=admin_hash, role="admin", is_active=True))
             await session.commit()
         app.dependency_overrides[get_db] = override_db
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            ac.admin_headers = {"Authorization": "Bearer " + create_access_token({"sub": "regression-admin", "role": "admin", "credential_version": credential_fingerprint(admin_hash)})}
             yield ac
     finally:
         if previous_override is None:
@@ -95,18 +107,15 @@ async def test_system_health(client: AsyncClient):
     resp = await client.get("/api/health")
     assert resp.status_code == 200
     data = resp.json()
-    assert "status" in data
-    assert "database" in data
+    assert data == {"status": "alive"}
 
 
 @pytest.mark.asyncio
-async def test_system_root(client: AsyncClient):
-    """Verify root index metadata."""
-    resp = await client.get("/")
+async def test_system_readiness(client: AsyncClient):
+    """Readiness returns generic status for the isolated fixture services."""
+    resp = await client.get("/api/ready")
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "online"
-    assert "endpoints" in data
+    assert resp.json() == {"status": "ready", "database": True, "redis": True}
 
 
 # =========================================================================
@@ -114,7 +123,7 @@ async def test_system_root(client: AsyncClient):
 # =========================================================================
 @pytest.mark.asyncio
 async def test_student_registration_success(client: AsyncClient):
-    """Test registering a new student with welcome bonus."""
+    """Registration creates a real account with zero initial wallet balance."""
     unique_suffix = uuid.uuid4().hex[:6].upper()
     unique_roll = f"24CS{unique_suffix}"
     payload = {
@@ -131,7 +140,7 @@ async def test_student_registration_success(client: AsyncClient):
     assert data["success"] is True
     assert data["token"] is not None
     assert data["user"]["rollNumber"] == unique_roll
-    assert data["user"]["walletBalance"] == 250.0  # ₹250 signup bonus
+    assert data["user"]["walletBalance"] == 0
 
 
 @pytest.mark.asyncio
@@ -143,7 +152,7 @@ async def test_student_registration_duplicate_prevented(client: AsyncClient):
         "passcode": "pass1234",
     }
     resp = await client.post("/api/auth/register", json=payload)
-    assert resp.status_code == 400
+    assert resp.status_code == 409
     assert "already exists" in resp.json()["detail"].lower()
 
 
@@ -169,7 +178,7 @@ async def test_student_login_invalid_passcode(client: AsyncClient):
         json={"rollNumber": "21CS1042", "passcode": "wrongpasscode99"},
     )
     assert resp.status_code == 401
-    assert "incorrect passcode" in resp.json()["detail"].lower()
+    assert resp.json()["detail"] == "Invalid roll number or passcode"
 
 
 @pytest.mark.asyncio
@@ -180,54 +189,29 @@ async def test_student_login_nonexistent_roll(client: AsyncClient):
         json={"rollNumber": "99ZZ9999", "passcode": "000000"},
     )
     assert resp.status_code == 401
-    assert "not found" in resp.json()["detail"].lower()
+    assert resp.json()["detail"] == "Invalid roll number or passcode"
 
 
 @pytest.mark.asyncio
-async def test_get_demo_users(client: AsyncClient):
-    """Test fetching pre-seeded demo student accounts."""
+async def test_demo_account_directory_is_not_public(client: AsyncClient):
     resp = await client.get("/api/auth/demo-users")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is True
-    assert len(data["users"]) >= 4
+    assert resp.status_code == 404
+    assert "users" not in resp.json()
 
 
 # =========================================================================
 # 3. PASSCODE RESET OTP FLOW
 # =========================================================================
 @pytest.mark.asyncio
-async def test_passcode_reset_otp_flow(client: AsyncClient):
-    """Test end-to-end OTP request and passcode update flow."""
-    # 1. Request OTP
-    req_resp = await client.post(
-        "/api/auth/forgot-passcode",
-        json={"rollNumber": "21IT2015"},
-    )
-    assert req_resp.status_code == 200
-    req_data = req_resp.json()
-    assert req_data["success"] is True
-    otp_code = req_data.get("otp") or "123456"
-
-    # 2. Reset Passcode with OTP
-    reset_resp = await client.post(
-        "/api/auth/reset-passcode",
-        json={
-            "rollNumber": "21IT2015",
-            "otp": otp_code,
-            "newPasscode": "newpass789",
-        },
-    )
-    assert reset_resp.status_code == 200
-    assert reset_resp.json()["success"] is True
-
-    # 3. Verify login with newly set passcode
-    login_resp = await client.post(
-        "/api/auth/login",
-        json={"rollNumber": "21IT2015", "passcode": "newpass789"},
-    )
-    assert login_resp.status_code == 200
-    assert login_resp.json()["success"] is True
+async def test_recovery_cannot_reset_without_delivery(client: AsyncClient):
+    """Unavailable recovery never returns an OTP or accepts a universal code."""
+    response = await client.post("/api/auth/forgot-passcode", json={"rollNumber": "21IT2015"})
+    assert response.status_code == 503
+    assert "otp" not in response.json()
+    reset = await client.post("/api/auth/reset-passcode", json={"rollNumber": "21IT2015", "otp": "123456", "newPasscode": "newpass789"})
+    assert reset.status_code == 503
+    assert (await client.post("/api/auth/login", json={"rollNumber": "21IT2015", "passcode": "newpass789"})).status_code == 401
+    assert (await client.post("/api/auth/login", json={"rollNumber": "21IT2015", "passcode": "000000"})).status_code == 200
 
 
 # =========================================================================
@@ -341,28 +325,13 @@ async def test_get_wallet_balance(client: AsyncClient, auth_headers: dict):
 
 
 @pytest.mark.asyncio
-async def test_wallet_recharge(client: AsyncClient, auth_headers: dict):
-    """Test recharging wallet with funds and ledger tracking."""
-    recharge_amount = 150.0
-    b_before = (await client.get("/api/student/wallet", headers=auth_headers)).json()["walletBalance"]
-
-    resp = await client.post(
-        "/api/student/wallet/recharge",
-        json={"amount": recharge_amount, "paymentMethod": "UPI"},
-        headers=auth_headers,
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["success"] is True
-    assert data["walletBalance"] == pytest.approx(b_before + recharge_amount, 0.01)
-
-    # Verify transaction ledger
-    txns_resp = await client.get("/api/student/wallet/transactions", headers=auth_headers)
-    assert txns_resp.status_code == 200
-    txns = txns_resp.json()
-    assert len(txns) >= 1
-    assert txns[0]["type"] == "credit"
-    assert txns[0]["amount"] == recharge_amount
+async def test_wallet_recharge_requires_verified_provider(client: AsyncClient, auth_headers: dict):
+    """Client claims cannot create money while payment processing is disabled."""
+    before = (await client.get("/api/student/wallet", headers=auth_headers)).json()["walletBalance"]
+    response = await client.post("/api/student/wallet/recharge", json={"amount": 150, "paymentMethod": "UPI"}, headers={**auth_headers, "Idempotency-Key": uuid.uuid4().hex})
+    assert response.status_code == 503
+    after = (await client.get("/api/student/wallet", headers=auth_headers)).json()["walletBalance"]
+    assert after == before
 
 
 # =========================================================================
@@ -371,13 +340,7 @@ async def test_wallet_recharge(client: AsyncClient, auth_headers: dict):
 @pytest.mark.asyncio
 async def test_place_order_with_wallet(client: AsyncClient, auth_headers: dict):
     """Test placing a food order paying via Canteen Wallet."""
-    # Ensure sufficient balance
-    await client.post(
-        "/api/student/wallet/recharge",
-        json={"amount": 300.0, "paymentMethod": "UPI"},
-        headers=auth_headers,
-    )
-
+    before = (await client.get("/api/student/wallet", headers=auth_headers)).json()["walletBalance"]
     order_payload = {
         "items": [
             {"id": "veg-burger", "name": "Veg Burger", "qty": 1, "price": 60.0, "customizations": ["Extra cheese"]},
@@ -390,16 +353,18 @@ async def test_place_order_with_wallet(client: AsyncClient, auth_headers: dict):
     resp = await client.post(
         "/api/student/orders",
         json=order_payload,
-        headers=auth_headers,
+        headers={**auth_headers, "Idempotency-Key": uuid.uuid4().hex},
     )
     assert resp.status_code == 201
     order = resp.json()
     assert "number" in order
     assert order["payment"] == "Paid"
     assert order["paymentMethod"] == "wallet"
-    assert order["pickupCounter"] == "Counter 2"
+    assert order["pickupCounter"] in ("Counter 1", "Counter 2")
     assert order["queuePosition"] >= 1
     assert len(order["items"]) == 2
+    after = (await client.get("/api/student/wallet", headers=auth_headers)).json()["walletBalance"]
+    assert after == pytest.approx(before - order["total"], 0.01)
 
     # Verify live tracking endpoint
     order_id = order["orderId"]
@@ -415,23 +380,13 @@ async def test_place_order_with_wallet(client: AsyncClient, auth_headers: dict):
 
 
 @pytest.mark.asyncio
-async def test_place_order_with_upi(client: AsyncClient, auth_headers: dict):
-    """Test placing a food order paying via Campus UPI."""
-    order_payload = {
-        "items": [
-            {"id": "cold-coffee", "name": "Cold Coffee", "qty": 2, "price": 50.0},
-        ],
-        "paymentMethod": "UPI",
-    }
-    resp = await client.post(
-        "/api/student/orders",
-        json=order_payload,
-        headers=auth_headers,
-    )
-    assert resp.status_code == 201
-    order = resp.json()
-    assert order["paymentMethod"] == "UPI"
-    assert order["payment"] == "Paid"
+async def test_direct_upi_claim_cannot_mark_order_paid(client: AsyncClient, auth_headers: dict):
+    before = (await client.get("/api/student/orders", headers=auth_headers)).json()
+    payload = {"items": [{"id": "cold-coffee", "qty": 2, "name": "Client label", "price": 1}], "paymentMethod": "upi"}
+    response = await client.post("/api/student/orders", json=payload, headers={**auth_headers, "Idempotency-Key": uuid.uuid4().hex})
+    assert response.status_code == 503
+    after = (await client.get("/api/student/orders", headers=auth_headers)).json()
+    assert len(after) == len(before)
 
 
 @pytest.mark.asyncio
@@ -454,7 +409,7 @@ async def test_order_cancellation_and_auto_refund(client: AsyncClient, auth_head
         "items": [{"id": "masala-maggi", "name": "Masala Maggi", "qty": 1, "price": 40.0}],
         "paymentMethod": "wallet",
     }
-    create_resp = await client.post("/api/student/orders", json=order_payload, headers=auth_headers)
+    create_resp = await client.post("/api/student/orders", json=order_payload, headers={**auth_headers, "Idempotency-Key": uuid.uuid4().hex})
     assert create_resp.status_code == 201
     created_order = create_resp.json()
     order_id = created_order["orderId"]
@@ -476,6 +431,9 @@ async def test_order_cancellation_and_auto_refund(client: AsyncClient, auth_head
     # Balance after cancel must be refunded
     w_after = (await client.get("/api/student/wallet", headers=auth_headers)).json()["walletBalance"]
     assert w_after == pytest.approx(w_before + total_paid, 0.01)
+    retry = await client.post(f"/api/student/orders/{order_id}/cancel?reason=Retry", headers=auth_headers)
+    assert retry.status_code == 200
+    assert (await client.get("/api/student/wallet", headers=auth_headers)).json()["walletBalance"] == w_after
 
 
 # =========================================================================
@@ -486,16 +444,19 @@ async def test_order_status_progression_and_pickup(client: AsyncClient, auth_hea
     """Test updating order to Ready and then picking up / completing."""
     order_payload = {
         "items": [{"id": "french-fries", "name": "French Fries", "qty": 1, "price": 55.0}],
-        "paymentMethod": "UPI",
+        "paymentMethod": "wallet",
     }
-    ord_resp = await client.post("/api/student/orders", json=order_payload, headers=auth_headers)
+    ord_resp = await client.post("/api/student/orders", json=order_payload, headers={**auth_headers, "Idempotency-Key": uuid.uuid4().hex})
+    assert ord_resp.status_code == 201
     order_id = ord_resp.json()["orderId"]
+    assert (await client.post(f"/api/admin/orders/{order_id}/status", json={"status": "Ready"}, headers=client.admin_headers)).status_code == 409
+    assert (await client.post(f"/api/admin/orders/{order_id}/status", json={"status": "Preparing"}, headers=client.admin_headers)).status_code == 200
 
     # 1. Update status to Ready
     ready_resp = await client.post(
         f"/api/admin/orders/{order_id}/status",
         json={"status": "Ready"},
-        headers={"Authorization": "Bearer " + create_access_token({"sub": "regression-admin", "role": "admin"})},
+        headers=client.admin_headers,
     )
     assert ready_resp.status_code == 200
     assert ready_resp.json()["status"] == "Ready"
@@ -506,7 +467,10 @@ async def test_order_status_progression_and_pickup(client: AsyncClient, auth_hea
         headers=auth_headers,
     )
     assert pickup_resp.status_code == 200
-    assert pickup_resp.json()["status"] == "Completed"
+    assert pickup_resp.json()["status"] == "Picked Up"
+    completed = await client.post(f"/api/admin/orders/{order_id}/status", json={"status": "Completed"}, headers=client.admin_headers)
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "Completed"
 
 
 # =========================================================================
@@ -517,7 +481,8 @@ async def test_submit_order_review(client: AsyncClient, auth_headers: dict):
     """Test submitting review for a completed order."""
     orders = (await client.get("/api/student/orders", headers=auth_headers)).json()
     assert len(orders) >= 1
-    order_id = orders[0]["orderId"]
+    completed = next(order for order in orders if order["status"] == "Completed")
+    order_id = completed["orderId"]
 
     review_payload = {
         "orderId": order_id,

@@ -11,20 +11,20 @@ function makeStorage(seed = {}) {
   const data = new Map(Object.entries(seed));
   return { getItem: k => data.get(k) ?? null, setItem: (k, v) => data.set(k, String(v)), removeItem: k => data.delete(k), data };
 }
-function apiHarness(file) {
-  const sessionStorage = makeStorage({ sco_fastapi_student_token: 'student-session', sco_fastapi_admin_token: 'admin-session' });
+function apiHarness(file, cookieMode = false, seed = {}) {
+  const sessionStorage = makeStorage({ sco_fastapi_student_token: 'student-session', sco_fastapi_admin_token: 'admin-session', ...seed });
   const localStorage = makeStorage({ sco_auth_token: 'legacy-mock-token', sco_auth_user: 'legacy-profile' });
   const events = [], calls = [];
   let responder = async () => ({ ok: true, status: 200, json: async () => ({}) });
   const exports = {};
   const ctx = vm.createContext({
-    exports, require: id => { assert.equal(id, './apiConfig'); return { apiUrl: p => p }; },
+    exports, __viteEnv: { VITE_AUTH_COOKIE_MODE: cookieMode ? 'true' : 'false' }, require: id => { if (id === './apiClient') return { apiClient: {} }; assert.equal(id, './apiConfig'); return { apiUrl: p => p }; },
     sessionStorage, localStorage, window: { dispatchEvent: e => events.push(e), addEventListener() {}, removeEventListener() {} },
     Event: class Event { constructor(type) { this.type = type; } }, CustomEvent: class CustomEvent { constructor(type, options) { this.type = type; this.detail = options?.detail; } },
-    AbortController, AbortSignal, setTimeout, clearTimeout,
+    AbortController, AbortSignal, FormData, crypto: require('node:crypto').webcrypto, setTimeout, clearTimeout,
     fetch: async (url, options) => { calls.push({ url, options }); return responder(url, options); },
   });
-  const code = ts.transpileModule(fs.readFileSync(path.join(repo, file), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  const code = ts.transpileModule(fs.readFileSync(path.join(repo, file), 'utf8').replaceAll('import.meta.env', '__viteEnv'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   vm.runInContext(code, ctx, { filename: file });
   return { exports, sessionStorage, localStorage, events, calls, respond: fn => { responder = fn; } };
 }
@@ -128,6 +128,58 @@ function importGraph(entry) {
   await check('Admin logout clears only admin authentication', () => {
     const h = apiHarness('src/lib/adminApi.ts'); h.exports.adminLogout(); assert.equal(h.sessionStorage.getItem('sco_fastapi_admin_token'), null); assert.equal(h.sessionStorage.getItem('sco_fastapi_student_token'), 'student-session');
   });
+  await check('Cookie student authentication uses HttpOnly session mode without browser JWT', async () => {
+    const h = apiHarness('src/lib/apiClient.ts', true);
+    h.respond(async () => ({ ok: true, status: 200, json: async () => ({ success: true, token: null, user: { id: 'student-1' } }) }));
+    assert.equal((await h.exports.apiClient.login('ROLL', 'PASS')).success, true);
+    assert.equal(h.calls[0].options.credentials, 'include');
+    assert.equal(h.calls[0].options.headers['X-Session-Mode'], 'cookie');
+    assert.equal(h.calls[0].options.headers.Authorization, undefined);
+    assert.equal(h.sessionStorage.getItem('sco_fastapi_student_token'), null);
+    assert.equal(h.sessionStorage.getItem('sco_fastapi_admin_token'), 'admin-session');
+    assert.equal(h.exports.apiClient.hasSession(), true);
+    await h.exports.apiClient.getMe();
+    assert.equal(h.calls[1].options.credentials, 'include');
+    assert.equal(h.calls[1].options.headers.Authorization, undefined);
+  });
+  await check('Cookie admin authentication never stores returned JWT and always includes cookies', async () => {
+    const h = apiHarness('src/lib/adminApi.ts', true);
+    h.respond(async () => ({ ok: true, status: 200, json: async () => ({ access_token: null, id: 1, username: 'admin', role: 'admin', is_active: true }) }));
+    await h.exports.adminLogin('admin', 'secret');
+    assert.equal(h.calls[0].options.headers['X-Session-Mode'], 'cookie');
+    assert.equal(h.sessionStorage.getItem('sco_fastapi_admin_token'), null);
+    assert.equal(h.sessionStorage.getItem('sco_fastapi_student_token'), 'student-session');
+    await h.exports.getAdminMe();
+    assert.equal(h.calls[1].options.credentials, 'include');
+    assert.equal(h.calls[1].options.headers.Authorization, undefined);
+  });
+  await check('Cookie session replacement survives an older rejected request', async () => {
+    const h = apiHarness('src/lib/apiClient.ts', true); let finish;
+    h.respond((url) => url.endsWith('/me') ? new Promise(resolve => { finish = resolve; }) : Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, token: null, user: { id: 'new-session' } }) }));
+    const old = h.exports.apiClient.getMe();
+    await h.exports.apiClient.login('ROLL', 'PASS');
+    finish({ ok: false, status: 401, json: async () => ({ detail: 'Old session' }) });
+    await assert.rejects(old);
+    assert.equal(h.events.length, 0);
+  });
+  await check('Student checkout sends IDs and quantities with a stable idempotency header', async () => {
+    const h = apiHarness('src/lib/apiClient.ts');
+    await h.exports.apiClient.createOrder([{ id: 'dish', qty: 2 }], 'wallet', 'durable-key');
+    assert.equal(h.calls[0].options.headers['Idempotency-Key'], 'durable-key');
+    assert.deepEqual(JSON.parse(h.calls[0].options.body), { items: [{ id: 'dish', qty: 2 }], paymentMethod: 'wallet' });
+  });
+  await check('Checkout retry key survives module reload and contains no profile or payment credentials', () => {
+    const h = apiHarness('src/lib/paymentCheckout.ts');
+    const key = h.exports.checkoutIntent([{ id: 'dish', qty: 2 }], 'razorpay');
+    const reloaded = apiHarness('src/lib/paymentCheckout.ts', false, Object.fromEntries(h.sessionStorage.data));
+    assert.equal(reloaded.exports.checkoutIntent([{ id: 'dish', qty: 2 }], 'razorpay'), key);
+    const saved = JSON.parse(h.sessionStorage.getItem('sco_student_checkout_intent'));
+    assert.deepEqual(Object.keys(saved).sort(), ['fingerprint', 'key']);
+    assert.doesNotMatch(JSON.stringify(saved), /rollNumber|studentName|email|phone|signature|password/);
+    assert.notEqual(reloaded.exports.checkoutIntent([{ id: 'dish', qty: 3 }], 'razorpay'), key);
+    reloaded.exports.clearCheckoutIntent();
+    assert.equal(reloaded.sessionStorage.getItem('sco_student_checkout_intent'), null);
+  });
   await check('SW bypasses API paths, POSTs, cross-origin and authorized requests', async () => {
     const h = workerHarness();
     for (const [url, opts] of [['http://localhost:5173/api', {}], ['http://localhost:5173/api/student/wallet', {}], ['http://localhost:5173/api/auth/login', { method: 'POST' }], ['https://backend.example/api/student/orders', {}], ['http://localhost:5173/assets/index-a1b2c3.js', { authorization: true }]]) assert.equal(h.request(url, opts), undefined);
@@ -139,7 +191,7 @@ function importGraph(entry) {
   });
   await check('Offline navigation uses generic offline page, never cached user UI/data', async () => {
     const h = workerHarness(); h.fail(); assert.equal(await h.request('http://localhost:5173/profile', { mode: 'navigate' }), h.offline); assert.deepEqual(h.matches, ['/offline.html']);
-    const html = fs.readFileSync(path.join(repo, 'student/public/offline.html'), 'utf8'); assert.match(html, /offline/i); assert.doesNotMatch(html, /localStorage|sessionStorage|walletBalance|token/i);
+    const html = fs.readFileSync(path.join(repo, 'student/public/offline.html'), 'utf8'); assert.match(html, /offline|reconnecting/i); assert.doesNotMatch(html, /localStorage|sessionStorage|walletBalance|token/i);
   });
   await check('SW cache cleanup affects only obsolete student-static caches', async () => {
     const h = workerHarness(); let pending; h.handlers.activate({ waitUntil: p => { pending = p; } }); await pending; assert.deepEqual(h.deleted, ['student-static-obsolete']);

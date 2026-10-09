@@ -32,3 +32,14 @@ Desktop.ini
 *.db
 *.dump
 *.sql.gz
+
+# Encrypted database backup artifacts stay outside source/build contexts.
+**/*.dump.age
+**/*.dump.age.sha256
+
+# Private operator connection files stay outside Git and image contexts.
+*.backup
+pg_service.conf
+.pg_service.conf
+pgpass.conf
+.pgpass

@@ -1,8 +1,12 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
 from typing import Optional
+from urllib.parse import urlsplit
+
 import bcrypt
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,202 +16,166 @@ from database import get_db
 from models import AdminUser, StudentUser
 from schemas import TokenPayload
 
-# HTTP Bearer Scheme for Swagger UI & Header Extraction
-security = HTTPBearer(
-    scheme_name="JWT Bearer Token",
-    description="Enter JWT token with 'Bearer <token>' or just the token in Swagger UI.",
-    auto_error=True,
-)
-
-optional_security = HTTPBearer(
-    scheme_name="Optional JWT Bearer Token",
-    description="Optional JWT token.",
-    auto_error=False,
-)
+security = HTTPBearer(scheme_name="JWT Bearer Token", auto_error=False)
+optional_security = security
+COOKIE_NAMES = {"student": "canteen_student", "admin": "canteen_admin"}
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify raw password against bcrypt hash."""
     try:
-        if not plain_password or not hashed_password:
+        raw = plain_password.encode("utf-8")
+        if not raw or len(raw) > 72 or not hashed_password:
             return False
-        return bcrypt.checkpw(
-            plain_password.encode("utf-8")[:72],
-            hashed_password.encode("utf-8"),
-        )
-    except Exception:
+        return bcrypt.checkpw(raw, hashed_password.encode("utf-8"))
+    except (ValueError, TypeError, UnicodeError):
         return False
 
 
 def get_password_hash(password: str) -> str:
-    """Generate bcrypt hash for a plaintext password."""
-    # Truncate to 72 bytes per bcrypt specification
-    pwd_bytes = password.encode("utf-8")[:72]
-    salt = bcrypt.gensalt()
-    return bcrypt.hashpw(pwd_bytes, salt).decode("utf-8")
+    raw = password.encode("utf-8")
+    if not raw or len(raw) > 72:
+        raise ValueError("Password must contain between 1 and 72 UTF-8 bytes")
+    return bcrypt.hashpw(raw, bcrypt.gensalt()).decode("utf-8")
 
 
 def normalize_roll_number(roll: str) -> str:
-    """Standardizes roll numbers to uppercase without whitespace (e.g., '21cs 1042' -> '21CS1042')."""
-    return roll.strip().upper().replace(" ", "") if roll else ""
+    return "".join(roll.upper().split()) if roll else ""
+
+
+def credential_fingerprint(password_hash: str) -> str:
+    return hmac.new(settings.SECRET_KEY.encode("utf-8"), password_hash.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Generate a signed JWT token containing payload data and expiration timestamp."""
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(
-            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
-        )
-
-    to_encode.update({"exp": expire, "iat": datetime.now(timezone.utc)})
-    encoded_jwt = jwt.encode(
-        to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM
-    )
-    return encoded_jwt
+    if not isinstance(data.get("sub"), str) or not data["sub"] or not isinstance(data.get("role"), str):
+        raise ValueError("Token subject and role are required")
+    now = datetime.now(timezone.utc)
+    claims = dict(data)
+    claims.update({"exp": now + (expires_delta if expires_delta is not None else timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)), "iat": now})
+    return jwt.encode(claims, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
 
 
 def decode_access_token(token: str) -> TokenPayload:
-    """Decode and validate a JWT access token."""
     try:
-        payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
-        )
-        username: str = payload.get("sub")
-        role: str = payload.get("role")
-        exp: int = payload.get("exp")
-        if username is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token payload: missing subject identifier",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return TokenPayload(sub=username, role=role, exp=exp)
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token has expired. Please log in again.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    except jwt.InvalidTokenError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        claims = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM],
+                            options={"require": ["exp", "iat", "sub", "role"]})
+        if (not isinstance(claims["sub"], str) or not claims["sub"]
+                or claims["role"] not in {"student", "admin"}
+                or not isinstance(claims["exp"], int) or isinstance(claims["exp"], bool)
+                or not isinstance(claims["iat"], int) or isinstance(claims["iat"], bool)):
+            raise jwt.InvalidTokenError("Invalid claims")
+        return TokenPayload(sub=claims["sub"], role=claims["role"], exp=claims["exp"],
+                            credential_version=claims.get("credential_version"))
+    except (jwt.InvalidTokenError, ValueError, TypeError, KeyError):
+        raise HTTPException(status_code=401, detail="Invalid or expired session",
+                            headers={"WWW-Authenticate": "Bearer"})
+
+
+def validate_session_origin(request: Request, role: str) -> None:
+    # Ports share cookies in development, and sibling production hosts are
+    # same-site. Authorize the requesting application independently of CORS.
+    source = request.headers.get("origin")
+    from_referer = False
+    if not source and request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+        source = request.headers.get("referer")
+        from_referer = True
+    try:
+        parsed = urlsplit(source or "")
+        if (role not in COOKIE_NAMES or parsed.scheme not in {"http", "https"}
+                or not parsed.netloc or not parsed.hostname or parsed.username or parsed.password
+                or (not from_referer and (parsed.path not in ("", "/") or parsed.query or parsed.fragment))):
+            raise ValueError("Invalid origin")
+        # Validate the port syntax without accepting credentials or opaque origins.
+        _ = parsed.port
+        origin = parsed.scheme + "://" + parsed.netloc
+        values = settings.ADMIN_CORS_ORIGINS if role == "admin" else settings.STUDENT_CORS_ORIGINS
+        if origin not in {value.rstrip("/") for value in values}:
+            raise ValueError("Origin does not belong to this role")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=403, detail="Request origin is not allowed")
+
+
+def issue_session(response: Response, request: Request, token: str, role: str) -> bool:
+    cookie_mode = request.headers.get("x-session-mode", "").lower() == "cookie"
+    if not cookie_mode:
+        return False
+    if not settings.SESSION_COOKIE_MODE_ENABLED:
+        raise HTTPException(status_code=503, detail="Cookie sessions are unavailable")
+    validate_session_origin(request, role)
+    response.set_cookie(COOKIE_NAMES[role], token, max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+                        httponly=True, secure=settings.ENVIRONMENT == "production", samesite="lax", path="/api")
+    response.headers["Cache-Control"] = "no-store"
+    return True
+
+
+def clear_session(response: Response, role: str) -> None:
+    response.delete_cookie(COOKIE_NAMES[role], path="/api",
+                           secure=settings.ENVIRONMENT == "production", httponly=True, samesite="lax")
+    response.headers["Cache-Control"] = "no-store"
+
+
+def _session_token(credentials: Optional[HTTPAuthorizationCredentials], request: Request | None, role: str) -> str | None:
+    if credentials and credentials.credentials:
+        return credentials.credentials
+    token = request.cookies.get(COOKIE_NAMES[role]) if request else None
+    if token:
+        validate_session_origin(request, role)
+    return token
+
+
+def _check_fingerprint(token_data: TokenPayload, stored_hash: str) -> None:
+    supplied = getattr(token_data, "credential_version", None)
+    if not isinstance(supplied, str) or not hmac.compare_digest(supplied, credential_fingerprint(stored_hash)):
+        raise HTTPException(status_code=401, detail="Session is no longer valid", headers={"WWW-Authenticate": "Bearer"})
 
 
 async def get_current_admin(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: AsyncSession = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: AsyncSession = Depends(get_db), request: Request = None,
 ) -> AdminUser:
-    """
-    Security Dependency:
-    Extracts and validates the JWT Bearer token, then queries database
-    to confirm the user exists, is active, and possesses the 'admin' role.
-    """
-    token = credentials.credentials
-    token_data = decode_access_token(token)
-
-    # Query DB to verify active admin user
-    result = await db.execute(
-        select(AdminUser).where(AdminUser.username == token_data.sub)
-    )
-    user = result.scalar_one_or_none()
-
+    token = _session_token(credentials, request, "admin")
+    if not token:
+        raise HTTPException(status_code=401, detail="Administrator sign-in required", headers={"WWW-Authenticate": "Bearer"})
+    claims = decode_access_token(token)
+    if claims.role != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    user = (await db.execute(select(AdminUser).where(AdminUser.username == claims.sub))).scalar_one_or_none()
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Administrator account not found",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Administrator account is disabled",
-        )
-
-    if user.role != "admin" or token_data.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Admin privileges required to access this endpoint",
-        )
-
+        raise HTTPException(status_code=401, detail="Invalid session")
+    if not user.is_active or user.role != "admin":
+        raise HTTPException(status_code=403, detail="Administrator access unavailable")
+    _check_fingerprint(claims, user.hashed_password)
     return user
 
 
 async def get_current_student(
-    credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: AsyncSession = Depends(get_db),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: AsyncSession = Depends(get_db), request: Request = None,
 ) -> StudentUser:
-    """
-    Security Dependency:
-    Extracts and validates the JWT Bearer token for students, queries the database
-    to confirm the student exists, is active, and returns the StudentUser record.
-    """
-    token = credentials.credentials
-    token_data = decode_access_token(token)
-
-    if token_data.role != "student":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="A student session is required",
-        )
-
-    # Query DB to verify active student user by id or roll_number
-    result = await db.execute(
-        select(StudentUser).where(
-            or_(
-                StudentUser.id == token_data.sub,
-                StudentUser.roll_number == normalize_roll_number(token_data.sub),
-            )
-        )
-    )
-    student = result.scalar_one_or_none()
-
+    token = _session_token(credentials, request, "student")
+    if not token:
+        raise HTTPException(status_code=401, detail="Student sign-in required", headers={"WWW-Authenticate": "Bearer"})
+    claims = decode_access_token(token)
+    if claims.role != "student":
+        raise HTTPException(status_code=403, detail="A student session is required")
+    student = (await db.execute(select(StudentUser).where(or_(
+        StudentUser.id == claims.sub, StudentUser.roll_number == normalize_roll_number(claims.sub),
+    )))).scalar_one_or_none()
     if student is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Student account not found or session expired",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
+        raise HTTPException(status_code=401, detail="Invalid session")
     if not student.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Student account is deactivated",
-        )
-
+        raise HTTPException(status_code=403, detail="Student access unavailable")
+    _check_fingerprint(claims, student.hashed_passcode)
     return student
 
 
 async def get_optional_student(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_db), request: Request = None,
 ) -> Optional[StudentUser]:
-    """
-    Optional Security Dependency:
-    Returns StudentUser if a valid bearer token is provided, or None otherwise.
-    """
-    if not credentials or not credentials.credentials:
+    if not _session_token(credentials, request, "student"):
         return None
-
     try:
-        token = credentials.credentials
-        token_data = decode_access_token(token)
-        if token_data.role != "student":
-            return None
-        result = await db.execute(
-            select(StudentUser).where(
-                or_(
-                    StudentUser.id == token_data.sub,
-                    StudentUser.roll_number == normalize_roll_number(token_data.sub),
-                )
-            )
-        )
-        return result.scalar_one_or_none()
-    except Exception:
+        return await get_current_student(credentials=credentials, db=db, request=request)
+    except HTTPException:
         return None

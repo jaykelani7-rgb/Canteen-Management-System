@@ -1,0 +1,44 @@
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.pfx
+**/*.p12
+.git
+.idea
+.vscode
+node_modules
+dist
+backend/.venv
+**/__pycache__
+**/.pytest_cache
+**/*.log
+**/*.dump
+**/*.backup
+
+# Android sources/assets/toolchain and local archives do not belong in server images.
+android
+**/*.apk
+**/*.aab
+**/*.jks
+**/*.keystore
+**/local.properties
+**/.gradle
+**/*.sqlite
+**/*.sqlite3
+**/*.db
+**/*.sql.gz
+backend/tests
+backend/conftest.py
+backend/pytest.ini
+**/*.backup
+
+# Encrypted database backup artifacts stay outside source/build contexts.
+**/*.dump.age
+**/*.dump.age.sha256
+
+# Private operator connection files stay outside Git and image contexts.
+**/pg_service.conf
+**/.pg_service.conf
+**/pgpass.conf
+**/.pgpass

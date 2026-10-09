@@ -1,6 +1,6 @@
 from datetime import datetime, time, timezone
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query, status
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -137,40 +137,27 @@ def is_time_in_window(current_time: time, window_str: str) -> bool:
     response_model=Token,
     summary="Admin Login to acquire JWT Bearer Token",
 )
-async def login(
-    login_data: AdminLoginRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Authenticate Canteen Administrator and generate a signed JWT bearer token.
-    """
-    stmt = select(AdminUser).where(AdminUser.username == login_data.username)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
-
+async def login(login_data: AdminLoginRequest, request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+    from auth import credential_fingerprint, issue_session
+    from rate_limit import enforce_rate_limit
+    await enforce_rate_limit(request, "admin-login", login_data.username)
+    user = (await db.execute(select(AdminUser).where(AdminUser.username == login_data.username))).scalar_one_or_none()
     if not user or not verify_password(login_data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
+        raise HTTPException(401, "Incorrect username or password", headers={"WWW-Authenticate": "Bearer"})
     if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin account is inactive",
-        )
+        raise HTTPException(403, "Admin account is inactive")
+    token = create_access_token({"sub": user.username, "role": user.role, "credential_version": credential_fingerprint(user.hashed_password)})
+    cookie = issue_session(response, request, token, "admin")
+    response.headers["Cache-Control"] = "no-store"
+    return Token(access_token="" if cookie else token, token_type="bearer", expires_in_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES, role=user.role)
 
-    access_token = create_access_token(
-        data={"sub": user.username, "role": user.role}
-    )
-
-    return Token(
-        access_token=access_token,
-        token_type="bearer",
-        expires_in_minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES,
-        role=user.role,
-    )
+@admin_router.post("/logout")
+async def admin_logout(request: Request, response: Response):
+    from auth import clear_session, validate_session_origin
+    if request.cookies.get("canteen_admin"):
+        validate_session_origin(request, "admin")
+    clear_session(response, "admin")
+    return {"success": True}
 
 
 @admin_router.get("/me", response_model=AdminUserResponse, summary="Get the authenticated administrator")
@@ -183,38 +170,9 @@ async def get_admin_profile(admin: AdminUser = Depends(get_current_admin)):
     response_model=OrderResponse,
     summary="Update Order Status (Admin Only)",
 )
-async def update_order_status(
-    order_id: int,
-    payload: OrderStatusUpdateRequest,
-    admin: AdminUser = Depends(get_current_admin),
-    db: AsyncSession = Depends(get_db),
-):
-    """Preserve counter status behavior while requiring an active administrator."""
-    result = await db.execute(select(Order).where(Order.id == order_id))
-    order = result.scalar_one_or_none()
-    if not order:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Order #{order_id} not found.")
-
-    order.order_status = payload.status.value
-    reason = payload.cancellationReason or payload.cancellation_reason
-    if reason:
-        order.cancellation_reason = reason
-    if payload.status == OrderStatusEnum.READY:
-        order.ready_at = datetime.now(timezone.utc)
-        db.add(Notification(
-            student_id=order.student_id,
-            title="Your food is ready! 🔔",
-            body=f"Order {order.order_number} is hot & ready! Pick up at Counter 2.",
-            notification_type="order_update",
-            emoji="🔔",
-            color_theme="mint",
-            order_id=order.id,
-        ))
-    elif payload.status == OrderStatusEnum.COMPLETED:
-        order.completed_at = datetime.now(timezone.utc)
-    await db.commit()
-    await db.refresh(order)
-    return order.to_dict()
+async def update_order_status(order_id: int, payload: OrderStatusUpdateRequest, admin: AdminUser = Depends(get_current_admin), db: AsyncSession = Depends(get_db)):
+    from order_service import change_status
+    return await change_status(db, order_id, payload.status.value, payload.cancellationReason or payload.cancellation_reason, admin_id=admin.id)
 
 
 # =========================================================================
@@ -243,7 +201,10 @@ async def get_today_menu(
     3. Checks Redis cache to serve high-concurrency requests instantaneously.
     4. On cache miss, queries PostgreSQL, caches the result in Redis with a TTL, and returns.
     """
-    now = datetime.now()
+    from zoneinfo import ZoneInfo
+    if settings.ENVIRONMENT == "production" and (simulated_time is not None or simulated_day is not None):
+        raise HTTPException(422, "Menu simulation is unavailable in production")
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
 
     # Determine evaluated day
     current_day = simulated_day.value if simulated_day else now.strftime("%A")
@@ -399,50 +360,16 @@ async def get_ala_carte_items(
     summary="Upload or Update Weekly Menu Schedule (Admin JWT Protected)",
     status_code=status.HTTP_200_OK,
 )
-async def upload_weekly_menu(
-    payload: WeeklyMenuBatchUpload,
-    db: AsyncSession = Depends(get_db),
-    admin: AdminUser = Depends(get_current_admin),  # Strict JWT Authentication Middleware
-):
-    """
-    **Admin Protected Endpoint**:
-    Strictly protected by JWT authentication middleware.
-    Accepts bulk weekly menu schedule items, performs upsert (insert or update on day + meal_type collision),
-    and invalidates all relevant Redis caches.
-    """
-    upserted_count = 0
-
-    for item in payload.schedule:
-        # Check if record already exists for this (day, meal_type)
-        stmt = select(WeeklyMenu).where(
-            WeeklyMenu.day == item.day.value,
-            WeeklyMenu.meal_type == item.meal_type.value,
-        )
-        result = await db.execute(stmt)
-        existing = result.scalar_one_or_none()
-
-        if existing:
-            existing.items = item.items
-        else:
-            new_entry = WeeklyMenu(
-                day=item.day.value,
-                meal_type=item.meal_type.value,
-                items=item.items,
-            )
-            db.add(new_entry)
-        upserted_count += 1
-
+async def upload_weekly_menu(payload:WeeklyMenuBatchUpload,db:AsyncSession=Depends(get_db),admin:AdminUser=Depends(get_current_admin)):
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    insert=pg_insert if db.bind.dialect.name=="postgresql" else sqlite_insert
+    entries={(item.day.value,item.meal_type.value):item for item in payload.schedule}
+    for key,item in sorted(entries.items()):
+        statement=insert(WeeklyMenu).values(day=key[0],meal_type=key[1],items=item.items)
+        await db.execute(statement.on_conflict_do_update(index_elements=["day","meal_type"],set_={"items":statement.excluded.items,"updated_at":datetime.now(timezone.utc)}))
     await db.commit()
-
-    # Invalidate all daily and weekly menu Redis caches so changes reflect immediately
-    cleared_keys = await cache_invalidate_prefix("canteen:menu:")
-
-    return {
-        "status": "success",
-        "message": f"Successfully updated {upserted_count} weekly menu schedule items.",
-        "admin_user": admin.username,
-        "cache_invalidated_keys_count": cleared_keys,
-    }
+    await cache_invalidate_prefix("canteen:menu:")
+    return {"status":"success","message":"Weekly menu saved","schedule":[{"day":day,"meal_type":meal,"items":item.items} for (day,meal),item in entries.items()]}
 
 
 @admin_router.post(

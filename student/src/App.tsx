@@ -7,7 +7,8 @@ import {
   type ReactNode,
 } from 'react'
 import { apiClient, STUDENT_SESSION_EXPIRED } from '../../src/lib/apiClient'
-import type { UserProfile, AuthResponse, RegisterInput, StudentMenuItem, StudentOrder, StudentOrderStatus, StudentNotification, OrderTracking, WalletTransaction } from '../../src/lib/studentTypes'
+import type { UserProfile, AuthResponse, RegisterInput, StudentMenuItem, StudentOrder, StudentOrderStatus, StudentNotification, OrderTracking, WalletTransaction, WalletTopup } from '../../src/lib/studentTypes'
+import { checkoutIntent, clearCheckoutIntent, completeGatewayPayment, completeWalletTopup, walletTopupIntent, clearWalletTopupIntent, CheckoutDismissed } from '../../src/lib/paymentCheckout'
 import './student.css'
 
 /* ============================================================================
@@ -17,7 +18,7 @@ import './student.css'
 
 /* ------------------------------- Data model ------------------------------- */
 
-type Category = 'All' | 'Snacks' | 'Meals' | 'Beverages'
+type Category = 'All' | StudentMenuItem['category']
 
 type MenuItem = StudentMenuItem
 type OrderStatus = StudentOrderStatus
@@ -56,6 +57,7 @@ type Store = {
   refresh: () => Promise<void>
   selectOrder: (order: StudentOrder) => void
   submitOrder: (paymentMethod: string) => Promise<StudentOrder>
+  completePayment: (order: StudentOrder) => Promise<StudentOrder>
   pickup: () => Promise<void>
   markRead: () => Promise<void>
   loginUser: (roll: string, passcode: string) => Promise<AuthResponse>
@@ -82,7 +84,7 @@ const useStore = () => useContext(Ctx)
 
 /* ------------------------------ Primitives -------------------------------- */
 
-const rupee = (n: number) => `₹${Number(n.toFixed(2))}`
+const rupee = (n: number | null | undefined) => `₹${Number(Number(n || 0).toFixed(2))}`
 const campusTime = (value: string) => new Date(value).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit' })
 const orderDate = (order: StudentOrder) => order.createdAt
   ? `${new Date(order.createdAt).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short' })} · ${campusTime(order.createdAt)}`
@@ -126,6 +128,7 @@ function Button({
 
 function StatusBadge({ status }: { status: OrderStatus }) {
   const map: Record<OrderStatus, { c: string; dot: string }> = {
+    'Payment Pending': { c: 'bg-amber/15 text-[#a86b06]', dot: 'bg-amber' },
     Queued: { c: 'bg-slate-soft text-slate', dot: 'bg-slate' },
     Preparing: { c: 'bg-tangerine-soft text-tangerine-dark', dot: 'bg-tangerine' },
     Ready: { c: 'bg-mint-soft text-mint', dot: 'bg-mint' },
@@ -149,6 +152,7 @@ function StatusBadge({ status }: { status: OrderStatus }) {
 
 function PaymentBadge({ status }: { status: PastOrder['payment'] }) {
   const map = {
+    Pending: 'bg-amber/15 text-[#a86b06]',
     Paid: 'bg-mint-soft text-mint',
     Failed: 'bg-berry-soft text-berry',
     Refunded: 'bg-slate-soft text-slate',
@@ -464,6 +468,7 @@ function ToastBanner() {
   return (
     <div
       key={toast}
+      role="status" aria-live="polite"
       className="pointer-events-none absolute bottom-28 left-1/2 z-50 -translate-x-1/2"
       style={{ animation: 'sco-toast-in 0.22s cubic-bezier(0.34,1.56,0.64,1) forwards' }}
     >
@@ -498,7 +503,6 @@ function LoginScreen() {
   const [showForgotModal, setShowForgotModal] = useState(false)
   const [forgotRoll, setForgotRoll] = useState('')
   const [forgotStep, setForgotStep] = useState<'request' | 'reset'>('request')
-  const [generatedOtp, setGeneratedOtp] = useState<string | null>(null)
   const [enteredOtp, setEnteredOtp] = useState('')
   const [newPasscode, setNewPasscode] = useState('')
   const [forgotLoading, setForgotLoading] = useState(false)
@@ -575,15 +579,14 @@ function LoginScreen() {
     try {
       const res = await apiClient.requestPasscodeReset(forgotRoll.trim())
       if (res.success) {
-        setGeneratedOtp(res.otp || null)
         setEnteredOtp('')
         setForgotStep('reset')
         showToast('Recovery request received. Follow the backend recovery instructions.')
       } else {
         setForgotError(res.message)
       }
-    } catch {
-      setForgotError('Error requesting reset code.')
+    } catch (cause) {
+      setForgotError((cause as Error).message)
     } finally {
       setForgotLoading(false)
     }
@@ -602,15 +605,14 @@ function LoginScreen() {
     setForgotLoading(true)
     try {
       const res = await apiClient.resetPasscode(forgotRoll.trim(), enteredOtp.trim(), newPasscode)
-      if (res.success && res.user) {
-        showToast(res.message || 'Passcode updated! Logging in...')
+      if (res.success) {
+        showToast(res.message || 'Passcode updated. Sign in again.')
         setShowForgotModal(false)
-        await loginUser(forgotRoll.trim(), newPasscode)
       } else {
         setForgotError(res.message)
       }
-    } catch {
-      setForgotError('Error resetting passcode.')
+    } catch (cause) {
+      setForgotError((cause as Error).message)
     } finally {
       setForgotLoading(false)
     }
@@ -867,7 +869,7 @@ function LoginScreen() {
             {forgotStep === 'request' ? (
               <div className="mt-4 space-y-3">
                 <p className="text-xs text-ink-soft">
-                  Enter your registered college roll number to receive a one-time OTP code.
+                  Request recovery for your registered college roll number. Contact the canteen administrator if recovery is unavailable.
                 </p>
                 <div>
                   <label className="block text-xs font-semibold text-ink-soft">
@@ -887,15 +889,6 @@ function LoginScreen() {
               </div>
             ) : (
               <div className="mt-4 space-y-3">
-                {generatedOtp && (
-                  <div className="rounded-2xl border border-amber/30 bg-amber-soft p-3 text-xs">
-                    <p className="font-bold text-ink">Development recovery code:</p>
-                    <p className="mt-0.5 text-ink-soft">
-                      Your Canteen OS security code is{' '}
-                      <span className="font-mono font-extrabold text-tangerine text-sm">{generatedOtp}</span>
-                    </p>
-                  </div>
-                )}
                 <div>
                   <label className="block text-xs font-semibold text-ink-soft">
                     Enter OTP Code
@@ -939,7 +932,7 @@ function CategoryTabs({
   value: Category
   onChange: (c: Category) => void
 }) {
-  const cats: Category[] = ['All', 'Snacks', 'Meals', 'Beverages']
+  const cats: Category[] = ['All', 'Snacks', 'Meals', 'Beverages', 'Desserts', 'Quick Bites']
   return (
     <div className="no-scrollbar flex gap-2 overflow-x-auto px-5">
       {cats.map((c) => (
@@ -1250,7 +1243,7 @@ function DetailsScreen() {
             {item.prepMins} min
           </div>
           <div className="flex items-center gap-1.5 rounded-full bg-card px-3 py-1.5 text-xs font-semibold shadow-sm">
-            🔥 {320 + item.prepMins * 12} kcal
+            🔥 {item.calories == null ? 'Nutrition unavailable' : item.calories + ' kcal'}
           </div>
         </div>
 
@@ -1379,15 +1372,6 @@ function CartScreen() {
             ))}
           </div>
 
-          <div className="mx-5 mt-5 flex items-center gap-3 rounded-2xl border border-dashed border-tangerine bg-tangerine-soft px-4 py-3">
-            <span className="text-lg">🏷️</span>
-            <input
-              placeholder="Add a coupon or campus code"
-              className="w-full bg-transparent text-sm outline-none placeholder:text-tangerine-dark/60"
-            />
-            <button className="text-xs font-bold text-tangerine-dark">Apply</button>
-          </div>
-
           <div className="mx-5 mt-4 rounded-3xl bg-card p-5 shadow-sm">
             <h3 className="font-display text-sm font-bold">Bill details</h3>
             <div className="mt-3 flex flex-col gap-2 text-sm">
@@ -1431,7 +1415,10 @@ function Row({ l, v, bold }: { l: string; v: string; bold?: boolean }) {
 
 function CheckoutScreen() {
   const { cart, cartTotal, go, submitOrder, user } = useStore()
-  const [pay, setPay] = useState('upi')
+  const [pay, setPay] = useState('wallet')
+  const [gatewayEnabled, setGatewayEnabled] = useState(false)
+  const [configError, setConfigError] = useState('')
+  useEffect(() => { let active = true; apiClient.getPaymentsConfig().then(config => { if (active) setGatewayEnabled(config.enabled && config.provider === 'razorpay') }).catch(cause => { if (active) setConfigError((cause as Error).message) }); return () => { active = false } }, [])
   const [failed, setFailed] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [unconfirmed, setUnconfirmed] = useState(false)
@@ -1439,7 +1426,7 @@ function CheckoutScreen() {
   const placeOrder = async () => {
     if (submitLock.current || !cart.length) return
     submitLock.current = true; setSubmitting(true); setFailed(null)
-    try { await submitOrder(pay); go('confirm') }
+    try { const placed = await submitOrder(pay); go(placed.payment === 'Paid' ? 'confirm' : 'tracking') }
     catch (e) { setFailed((e as Error).message); if ((e as { status?: number }).status === 0) setUnconfirmed(true) }
     finally { submitLock.current = false; setSubmitting(false) }
   }
@@ -1459,7 +1446,7 @@ function CheckoutScreen() {
                 {failed}
               </p>
             </div>
-            <PaymentBadge status="Failed" />
+
           </div>
         )}
 
@@ -1473,7 +1460,7 @@ function CheckoutScreen() {
               <p className="text-xs text-ink-soft">Counter assigned after ordering · Self pickup</p>
             </div>
             <span className="rounded-full bg-mint-soft px-2.5 py-1 text-[11px] font-bold text-mint">
-              Open
+              Self pickup
             </span>
           </div>
           <div className="mt-3 flex items-center gap-3 border-t border-line pt-3">
@@ -1487,17 +1474,19 @@ function CheckoutScreen() {
           </div>
         </div>
 
+        {configError && <p role="alert" className="mt-4 text-xs text-berry">{configError}</p>}
         {/* Payment methods */}
         <h3 className="mt-6 font-display text-sm font-bold">Payment method</h3>
         <div className="mt-2 flex flex-col gap-2">
           {[
-            { id: 'upi', l: 'Campus UPI', s: 'Demo payment — no money processed', e: '🟣' },
+            { id: 'upi', l: 'Campus UPI', s: gatewayEnabled ? 'Secure checkout through Razorpay' : 'Online payments unavailable', e: '🟣' },
             { id: 'wallet', l: 'Canteen Wallet', s: `Balance ₹${user?.walletBalance ?? 0}`, e: '👛' },
-            { id: 'card', l: 'Card', s: 'Demo payment — no money processed', e: '💳' },
+            { id: 'card', l: 'Card', s: gatewayEnabled ? 'Secure checkout through Razorpay' : 'Online payments unavailable', e: '💳' },
           ].map((p) => (
             <button
               key={p.id}
               onClick={() => setPay(p.id)}
+              disabled={submitting || (p.id !== 'wallet' && !gatewayEnabled)}
               className={`flex items-center gap-3 rounded-2xl border-2 bg-card px-4 py-3 text-left transition-colors ${pay === p.id ? 'border-tangerine' : 'border-transparent'}`}
             >
               <span className="text-xl">{p.e}</span>
@@ -1529,7 +1518,7 @@ function CheckoutScreen() {
       <div className="sticky bottom-0 mt-6 flex flex-col gap-2 border-t border-line bg-paper/95 px-5 py-4 backdrop-blur">
         <Button
           full
-          disabled={submitting || unconfirmed || !cart.length}
+          disabled={submitting || unconfirmed || !cart.length || (pay !== 'wallet' && !gatewayEnabled)}
           onClick={() => { void placeOrder() }}
         >
           {submitting ? 'Placing order…' : unconfirmed ? 'Check Your Orders before trying again' : `Pay ${rupee(total)} & place order`}
@@ -1597,33 +1586,42 @@ function ConfirmScreen() {
 /* ---- The hero screen: Live Order Tracking ---- */
 
 function TrackingScreen() {
-  const { go, order, selectOrder } = useStore()
+  const { go, order, selectOrder, completePayment, showToast } = useStore()
+  const [paying, setPaying] = useState(false)
+  const paymentLock = useRef(false)
   const [tracking, setTracking] = useState<OrderTracking | null>(null)
   const [error, setError] = useState<string | null>(null)
   useEffect(() => {
     if (!order) return
     let active = true
+    let inFlight = false
     const load = async () => {
+      if (inFlight || paymentLock.current) return
+      inFlight = true
       try {
         const [next, current] = await Promise.all([apiClient.getTracking(order.orderId), apiClient.getOrder(order.orderId)])
         if (!active) return
         setTracking(next); setError(null); selectOrder(current)
       } catch (e) { if (active) setError((e as Error).message) }
+      finally { inFlight = false }
     }
-    void load(); const timer = setInterval(() => { void load() }, 5000)
+    void load(); const timer = setInterval(() => { if (document.visibilityState === 'visible') void load() }, 5000)
     return () => { active = false; clearInterval(timer) }
   }, [order?.orderId])
   if (!order) return <Screen><TopBar title="Live Order Tracking" /><EmptyState emoji="🧾" title="Select an order" body="Open Your Orders to track a current order." cta="Your Orders" onCta={() => go('history')} /></Screen>
-  const status = tracking?.status ?? order.status
+  const status = order.status === 'Payment Pending' ? order.status : tracking?.status ?? order.status
+  const resumePayment = async () => { if (paymentLock.current) return; paymentLock.current = true; setPaying(true); try { const result = await completePayment(order); if (result.payment === 'Paid') go('confirm'); else showToast('Payment is awaiting confirmation. We will keep checking.') } catch (cause) { showToast((cause as Error).message) } finally { paymentLock.current = false; setPaying(false) } }
   return <Screen>
     <TopBar title="Live Order Tracking" onBack={() => go('home')} right={<StatusBadge status={status} />} />
     {error && <p role="alert" className="mx-5 mb-4 rounded-2xl bg-berry-soft p-3 text-sm text-berry">{error} · Retrying automatically</p>}
+    {order.refundStatus && <p role="status" className="mx-5 mb-4 rounded-2xl bg-card p-4 text-sm shadow-sm">Refund status: <strong>{order.refundStatus.replace(/_/g, ' ')}</strong>. Refund completion is confirmed by the payment provider.</p>}
+    {status === 'Payment Pending' && <div className="mx-5 mb-4 rounded-3xl bg-card p-5 shadow-sm"><p className="text-sm font-bold">Awaiting payment confirmation</p><p className="mt-1 text-xs text-ink-soft">Food preparation starts after the backend confirms payment.</p>{order.checkout && <div className="mt-3"><Button full disabled={paying} onClick={() => { void resumePayment() }}>{paying ? 'Opening secure payment…' : 'Complete payment'}</Button></div>}</div>}
     <div className="mx-5 overflow-hidden rounded-3xl bg-ink p-6 text-white">
       <div className="flex items-center justify-between"><div><p className="text-xs text-white/60">Order number</p><p className="font-mono text-2xl font-bold">{order.number}</p></div><StatusBadge status={status} /></div>
-      <div className="mt-6 text-center"><p className="text-xs uppercase tracking-widest text-white/50">{status === 'Ready' ? 'Ready for pickup' : ['Cancelled','Completed','Picked Up'].includes(status) ? status : 'Ready in about'}</p><p className="mt-1 font-mono text-6xl font-bold text-amber">{tracking?.countdownMinutesFormatted ?? '…'}</p><p className="mt-2 text-xs text-white/60">Expected ready time · {order.estimatedReadyAt ? campusTime(order.estimatedReadyAt) : tracking?.estimatedReadyTime ?? 'Updating…'}</p></div>
+      <div className="mt-6 text-center"><p className="text-xs uppercase tracking-widest text-white/50">{status === 'Payment Pending' ? 'Awaiting payment' : status === 'Ready' ? 'Ready for pickup' : ['Cancelled','Completed','Picked Up'].includes(status) ? status : 'Ready in about'}</p><p className="mt-1 font-mono text-6xl font-bold text-amber">{status === 'Payment Pending' ? '—' : tracking?.countdownMinutesFormatted ?? '…'}</p><p className="mt-2 text-xs text-white/60">Expected ready time · {order.estimatedReadyAt ? campusTime(order.estimatedReadyAt) : tracking?.estimatedReadyTime ?? 'Updating…'}</p></div>
       <div className="mt-5 h-2 overflow-hidden rounded-full bg-white/15"><div className="h-full rounded-full bg-tangerine transition-all" style={{ width: `${tracking?.progressPercent ?? 0}%` }} /></div>
     </div>
-    <div className="mt-4 grid grid-cols-2 gap-3 px-5"><div className="rounded-3xl bg-card p-4 shadow-sm"><p className="text-xs text-ink-soft">Queue position</p><p className="mt-1 font-mono text-3xl font-bold text-tangerine">#{tracking?.queuePosition ?? order.queuePosition}</p></div><div className="rounded-3xl bg-card p-4 shadow-sm"><p className="text-xs text-ink-soft">Orders ahead</p><p className="mt-1 font-mono text-3xl font-bold">{tracking?.ordersAhead ?? '…'}</p></div></div>
+    <div className="mt-4 grid grid-cols-2 gap-3 px-5"><div className="rounded-3xl bg-card p-4 shadow-sm"><p className="text-xs text-ink-soft">Queue position</p><p className="mt-1 font-mono text-3xl font-bold text-tangerine">#{status === 'Payment Pending' ? '—' : tracking?.queuePosition ?? order.queuePosition}</p></div><div className="rounded-3xl bg-card p-4 shadow-sm"><p className="text-xs text-ink-soft">Orders ahead</p><p className="mt-1 font-mono text-3xl font-bold">{tracking?.ordersAhead ?? '…'}</p></div></div>
     <div className="mx-5 mt-5 rounded-3xl bg-card p-5 shadow-sm"><h3 className="mb-4 font-display text-sm font-bold">Order timeline</h3>{tracking?.timeline.map(step => <div key={step.key} className="flex gap-4 pb-5 last:pb-0"><div className={`grid h-7 w-7 shrink-0 place-items-center rounded-full ${step.done ? 'bg-mint text-white' : step.active ? 'bg-tangerine text-white' : 'bg-paper text-ink-soft'}`}>{step.done ? '✓' : '•'}</div><div><p className={`text-sm font-bold ${step.active ? 'text-tangerine' : ''}`}>{step.label}</p><p className="text-[11px] text-ink-soft">{step.note}</p></div></div>)}</div>
     <div className="mx-5 mt-4 flex gap-3">{status === 'Ready' && <Button full onClick={() => go('ready')}>Show pickup token</Button>}<Button variant="ghost" full onClick={() => go('history')}>Your orders</Button></div>
   </Screen>
@@ -1819,8 +1817,10 @@ function OrderDetailsScreen() {
             <Row l="Item total" v={rupee(o.itemTotal)} />
             <Row l="Taxes & packaging" v={rupee(o.packagingFee + o.gst)} />
             <Row l="Paid via" v={o.paymentMethod} />
+            {o.refundStatus && <Row l="Refund status" v={o.refundStatus.replace(/_/g, ' ')} />}
+            {o.cancellationReason && <p className="text-xs text-ink-soft">Cancellation: {o.cancellationReason}</p>}
             <div className="my-1 border-t border-dashed border-line" />
-            <Row l="Total paid" v={rupee(o.total)} bold />
+            <Row l={o.payment === 'Pending' ? 'Payment pending' : 'Total paid'} v={rupee(o.payment === 'Paid' || o.payment === 'Refunded' ? o.total : 0)} bold />
           </div>
         </div>
 
@@ -1899,7 +1899,7 @@ function NotificationsScreen() {
 }
 
 function ProfileScreen() {
-  const { go, user, logoutUser } = useStore()
+  const { go, user, orders, logoutUser } = useStore()
   const initial = user?.name ? user.name.charAt(0) : 'A'
   const fullName = user?.name || 'Student'
   const roll = user?.rollNumber || ''
@@ -1907,7 +1907,7 @@ function ProfileScreen() {
   const walletBal = user?.walletBalance ?? 0
   const totalOrders = user?.totalOrders ?? 0
   const totalSpent = rupee(user?.totalSpent ?? 0)
-  const savedMins = user?.savedMinutes ?? 0
+  const activeOrders = orders.filter(row => !['Completed', 'Picked Up', 'Cancelled'].includes(row.status)).length
 
   return (
     <Screen>
@@ -1930,7 +1930,7 @@ function ProfileScreen() {
           {[
             { n: `${totalOrders}`, l: 'Orders' },
             { n: `${totalSpent}`, l: 'Spent' },
-            { n: `${savedMins}`, l: 'Saved min' },
+            { n: `${activeOrders}`, l: 'Active orders' },
           ].map((s) => (
             <div
               key={s.l}
@@ -1977,18 +1977,111 @@ function ProfileScreen() {
 }
 
 function WalletScreen() {
-  const { go, user, refresh } = useStore()
+  const { go, user, refresh, showToast } = useStore()
   const [transactions, setTransactions] = useState<WalletTransaction[]>([])
+  const [topups, setTopups] = useState<WalletTopup[]>([])
+  const [walletBalance, setWalletBalance] = useState<number | null>(null)
+  const [amount, setAmount] = useState('500')
+  const [gatewayEnabled, setGatewayEnabled] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  useEffect(() => { let active = true; apiClient.getWalletTransactions().then(data => { if(active) setTransactions(data) }).catch(e => { if(active) setError((e as Error).message) }).finally(() => { if(active) setLoading(false) }); void refresh(); return () => { active = false } }, [])
-  return <Screen nav={false}><TopBar title="Canteen wallet" onBack={() => go('profile')} /><div className="px-5"><div className="rounded-3xl bg-ink p-6 text-white"><p className="text-sm text-white/70">Available balance</p><p className="mt-2 font-mono text-4xl font-bold">{rupee(user?.walletBalance ?? 0)}</p></div><h3 className="mt-6 mb-3 font-display font-bold">Transactions</h3>{loading && <p className="text-sm text-ink-soft">Loading wallet…</p>}{error && <p className="text-sm text-berry">{error}</p>}{!loading && !error && !transactions.length && <p className="text-sm text-ink-soft">No transactions yet.</p>}{transactions.map(tx => <div key={tx.id} className="mb-3 rounded-2xl bg-card p-4 shadow-sm"><div className="flex justify-between gap-4"><p className="text-sm font-bold">{tx.description}</p><span className="font-mono text-sm font-bold">{rupee(tx.amount)}</span></div><p className="mt-2 text-xs text-ink-soft">{tx.dateFormatted ?? tx.createdAt} · {tx.status}</p></div>)}</div></Screen>
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const busy = useRef(false)
+  const alive = useRef(true)
+  const revision = useRef(0)
+  const reload = useRef<() => Promise<void>>(async () => {})
+  const refreshRef = useRef(refresh); refreshRef.current = refresh
+  useEffect(() => {
+    let active = true, inFlight = false
+    alive.current = true
+    const load = async () => {
+      if (inFlight || busy.current) return
+      inFlight = true
+      const requestedRevision = revision.current
+      try {
+        const results = await Promise.allSettled([apiClient.getWallet(), apiClient.getWalletTransactions(), apiClient.getWalletTopups(), apiClient.getPaymentsConfig()])
+        if (!active || requestedRevision !== revision.current) return
+        const [wallet, ledger, payments, config] = results
+        if (wallet.status === 'fulfilled') setWalletBalance(wallet.value.walletBalance)
+        if (ledger.status === 'fulfilled') setTransactions(ledger.value)
+        if (payments.status === 'fulfilled') setTopups(payments.value)
+        if (config.status === 'fulfilled') setGatewayEnabled(config.value.enabled && config.value.provider === 'razorpay')
+        const failed = results.find(result => result.status === 'rejected')
+        setError(failed?.status === 'rejected' ? (failed.reason as Error).message : null)
+      } finally { inFlight = false; if (active) setLoading(false) }
+    }
+    reload.current = load
+    void load(); void refreshRef.current()
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') void load() }, 10000)
+    return () => { active = false; alive.current = false; clearInterval(timer) }
+  }, [user?.id])
+  const rememberTopup = (next: WalletTopup) => {
+    if (!alive.current) return
+    setTopups(prev => [next, ...prev.filter(row => row.id !== next.id)])
+    // The backend returns the actual balance; the browser never calculates a credit.
+    if (next.state === 'captured') setWalletBalance(next.walletBalance)
+  }
+  const payTopup = async (existing?: WalletTopup) => {
+    if (busy.current || !gatewayEnabled) return
+    const value = existing?.amount ?? Number(amount)
+    if (!Number.isFinite(value) || value < 1 || value > 10000) { setError('Enter a top-up amount between ₹1 and ₹10,000.'); return }
+    busy.current = true; revision.current++; setBusyId(existing?.id ?? -1); setError(null)
+    let createdHere = false
+    try {
+      let next = existing ? await apiClient.getWalletTopup(existing.id) : await apiClient.rechargeWallet(value, walletTopupIntent(value))
+      createdHere = !existing
+      if (!alive.current) return
+      rememberTopup(next)
+      if (next.state !== 'captured' && next.checkout) {
+        next = await completeWalletTopup(next)
+        if (!alive.current) return
+        rememberTopup(next)
+      }
+      if (next.state === 'captured') {
+        // Only clear the key known to have created this intent; another device may have created a listed top-up.
+        if (createdHere) clearWalletTopupIntent(value)
+        showToast('Wallet top-up confirmed.')
+      } else showToast('Payment is pending. Refresh or resume this top-up; your balance changes after confirmation.')
+    } catch (cause) {
+      if (alive.current) {
+        if (cause instanceof CheckoutDismissed) showToast(cause.message)
+        else { setError((cause as Error).message); showToast('Check the top-up history before retrying. The same retry key will be reused.') }
+      }
+    } finally {
+      busy.current = false
+      if (alive.current) { setBusyId(null); void reload.current(); void refreshRef.current() }
+    }
+  }
+  return <Screen nav={false}>
+    <TopBar title="Canteen wallet" onBack={() => go('profile')} />
+    <div className="px-5">
+      <div className="rounded-3xl bg-ink p-6 text-white"><p className="text-sm text-white/70">Available balance</p><p className="mt-2 font-mono text-4xl font-bold">{rupee(walletBalance ?? user?.walletBalance ?? 0)}</p></div>
+      <div className="mt-4 rounded-3xl bg-card p-5 shadow-sm">
+        <h3 className="font-display text-sm font-bold">Add funds</h3>
+        <p className="mt-1 text-xs text-ink-soft">{gatewayEnabled ? 'Secure payment through Razorpay. Funds appear after confirmation.' : 'Online wallet top-ups are unavailable until payments are configured.'}</p>
+        <label className="mt-4 block text-xs font-semibold text-ink-soft">Amount (₹)<input type="number" min="1" max="10000" step="0.01" inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} disabled={busyId !== null} className="mt-1 w-full rounded-2xl border border-line bg-paper px-4 py-3 font-mono text-base font-bold outline-none focus:border-tangerine" /></label>
+        <div className="mt-3"><Button full disabled={!gatewayEnabled || busyId !== null || loading} onClick={() => { void payTopup() }}>{busyId === -1 ? 'Opening secure payment…' : 'Add funds securely'}</Button></div>
+      </div>
+      {error && <p role="alert" className="mt-4 rounded-2xl bg-berry-soft p-3 text-sm text-berry">{error}</p>}
+      {loading && <p role="status" className="mt-4 text-sm text-ink-soft">Loading wallet…</p>}
+      <div className="mt-6 mb-3 flex items-center justify-between"><h3 className="font-display font-bold">Top-up history</h3><button disabled={busyId !== null} onClick={() => { void reload.current() }} className="text-xs font-bold text-tangerine">Refresh</button></div>
+      {!loading && !topups.length && <p className="text-sm text-ink-soft">No top-ups yet.</p>}
+      {topups.map(topup => <div key={topup.id} className="mb-3 rounded-2xl bg-card p-4 shadow-sm">
+        <div className="flex justify-between gap-4"><p className="text-sm font-bold">Wallet top-up #{topup.id}</p><span className="font-mono text-sm font-bold">{rupee(topup.amount)}</span></div>
+        <p className="mt-2 text-xs text-ink-soft">{new Date(topup.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} · {topup.state.replace(/_/g, ' ')}</p>
+        {topup.state === 'captured' ? <p className="mt-2 text-xs font-bold text-mint">✓ Funds credited</p> : topup.checkout ? <div className="mt-3"><Button size="sm" full variant="soft" disabled={!gatewayEnabled || busyId !== null} onClick={() => { void payTopup(topup) }}>{busyId === topup.id ? 'Checking payment…' : 'Resume payment'}</Button></div> : <p className={'mt-2 text-xs ' + (topup.state === 'refund_required' ? 'text-berry' : 'text-ink-soft')}>{topup.state === 'refunded' ? 'Payment refunded. Your current balance is shown above.' : topup.state === 'refund_required' ? 'Payment could not be credited. Canteen staff must review its refund.' : topup.state === 'failed' ? 'Payment failed. Refresh to check whether it can be resumed.' : 'Awaiting confirmation. Refresh to check its status.'}</p>}
+      </div>)}
+      <h3 className="mt-6 mb-3 font-display font-bold">Transactions</h3>
+      {!loading && !transactions.length && <p className="text-sm text-ink-soft">No transactions yet.</p>}
+      {transactions.map(tx => <div key={tx.id} className="mb-3 rounded-2xl bg-card p-4 shadow-sm"><div className="flex justify-between gap-4"><p className="text-sm font-bold">{tx.description}</p><span className="font-mono text-sm font-bold">{rupee(tx.amount)}</span></div><p className="mt-2 text-xs text-ink-soft">{tx.dateFormatted ?? tx.createdAt} · {tx.status}</p></div>)}
+    </div>
+  </Screen>
 }
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('login')
   const [user, setUser] = useState<UserProfile | null>(null)
-  const [checking, setChecking] = useState(Boolean(apiClient.getToken()))
+  const [checking, setChecking] = useState(apiClient.hasSession())
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [orders, setOrders] = useState<StudentOrder[]>([])
   const [order, setOrder] = useState<StudentOrder | null>(null)
@@ -2001,19 +2094,24 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sessionVersion = useRef(0)
+  const refreshInFlight = useRef(false)
+  const orderSubmitLock = useRef(false)
+  const userRef = useRef(user)
+  userRef.current = user
   const showToast = (msg: string) => { if(toastTimer.current) clearTimeout(toastTimer.current); setToast(msg); toastTimer.current = setTimeout(() => setToast(null), 3500) }
-  const clearSession = () => { sessionVersion.current++; setUser(null); setOrders([]); setOrder(null); setNotifications([]); setCart([]); setSelected(null); setError(null); setBanner(null); setScreen('login'); setChecking(false); setLoading(false) }
+  const clearSession = () => { sessionVersion.current++; refreshInFlight.current = false; setUser(null); setOrders([]); setOrder(null); setNotifications([]); setCart([]); setSelected(null); setError(null); setBanner(null); setScreen('login'); setChecking(false); setLoading(false) }
   useEffect(() => {
-    const expire = () => { clearSession(); showToast('Your session expired. Please sign in again.') }
+    const expire = () => { const wasSignedIn = Boolean(userRef.current); clearSession(); if (wasSignedIn) showToast('Your session expired. Please sign in again.') }
     window.addEventListener(STUDENT_SESSION_EXPIRED, expire)
     let active = true
     const version = sessionVersion.current
-    if (apiClient.getToken()) apiClient.getMe().then(res => { if(active && version === sessionVersion.current && res.success && res.user) { setUser(res.user); setScreen('home') } }).catch(e => { if(active && version === sessionVersion.current) setError((e as Error).message) }).finally(() => { if(active && version === sessionVersion.current) setChecking(false) })
+    if (apiClient.hasSession()) apiClient.getMe().then(res => { if(active && version === sessionVersion.current && res.success && res.user) { setUser(res.user); setScreen('home') } }).catch(e => { if(active && version === sessionVersion.current) setError((e as Error).message) }).finally(() => { if(active && version === sessionVersion.current) setChecking(false) })
     return () => { active = false; window.removeEventListener(STUDENT_SESSION_EXPIRED, expire); if(toastTimer.current) clearTimeout(toastTimer.current) }
   }, [])
   const refresh = async () => {
-    if (!user) return
+    if (!user || refreshInFlight.current) return
     const version = sessionVersion.current
+    refreshInFlight.current = true
     setLoading(true)
     const results = await Promise.allSettled([apiClient.getMenu(), apiClient.getOrders(), apiClient.getNotifications(), apiClient.getMe()])
     if(version !== sessionVersion.current) return
@@ -2024,24 +2122,49 @@ export default function App() {
     if(u.status === 'fulfilled' && u.value.user) setUser(u.value.user)
     const failure = results.find(r => r.status === 'rejected')
     setError(failure?.status === 'rejected' ? (failure.reason as Error).message : null)
-    setBanner(failure ? 'network' : null); setLoading(false)
+    setBanner(failure ? 'network' : null); setLoading(false); refreshInFlight.current = false
   }
-  useEffect(() => { if(!user) return; void refresh(); const timer = setInterval(() => { void refresh() }, 15000); return () => clearInterval(timer) }, [user?.id])
+  useEffect(() => { if(!user) return; void refresh(); const timer = setInterval(() => { if (document.visibilityState === 'visible') void refresh() }, 15000); return () => clearInterval(timer) }, [user?.id])
   const loginUser = async (roll: string, passcode: string) => { const res = await apiClient.login(roll, passcode); if(res.success && res.user) { sessionVersion.current++; setUser(res.user); setScreen('home'); setError(null); showToast(`Welcome, ${res.user.name}!`) }; return res }
   const registerUser = async (input: RegisterInput) => { const res = await apiClient.register(input); if(res.success && res.user) { sessionVersion.current++; setUser(res.user); setScreen('home'); setError(null); showToast(`Welcome, ${res.user.name}!`) }; return res }
   const logoutUser = async () => { clearSession(); const version = sessionVersion.current; await apiClient.logout(); if(version === sessionVersion.current) showToast('Logged out successfully') }
-  const submitOrder = async (paymentMethod: string) => {
-    if (!user || !cart.length) throw new Error('Sign in and add food before ordering.')
-    if(cart.some(line => !line.item.available)) throw new Error('An item in your cart is currently unavailable. Remove it before ordering.')
+  const rememberOrder = (next: StudentOrder) => { setOrder(next); setOrders(prev => [next, ...prev.filter(row => row.orderId !== next.orderId)]) }
+  const completePayment = async (pending: StudentOrder) => {
     const version = sessionVersion.current
-    const next = await apiClient.createOrder(cart.map(line => ({ id: line.item.id, name: line.item.name, qty: line.qty, price: line.item.price, photo: line.item.photo })), paymentMethod)
-    if(version !== sessionVersion.current) throw new Error('Your session changed. Sign in to check Your Orders.')
-    setOrder(next); setOrders(prev => [next,...prev.filter(o => o.orderId !== next.orderId)]); setCart([]); void refresh(); return next
+    try {
+      const next = await completeGatewayPayment(pending)
+      if (version !== sessionVersion.current) throw new Error('Your session changed. Sign in to check Your Orders.')
+      rememberOrder(next)
+      if (next.payment === 'Paid') { clearCheckoutIntent(); setCart([]) }
+      void refresh()
+      return next
+    } catch (cause) {
+      if (cause instanceof CheckoutDismissed && version === sessionVersion.current) { showToast(cause.message); return pending }
+      throw cause
+    }
+  }
+  const submitOrder = async (paymentMethod: string) => {
+    if (orderSubmitLock.current) throw new Error('An order is already being submitted.')
+    if (!user || !cart.length) throw new Error('Sign in and add food before ordering.')
+    if (cart.some(line => !line.item.available)) throw new Error('An item in your cart is currently unavailable. Remove it before ordering.')
+    const version = sessionVersion.current
+    const items = cart.map(line => ({ id: line.item.id, qty: line.qty }))
+    const method = paymentMethod === 'wallet' ? 'wallet' : 'razorpay'
+    const key = checkoutIntent(items, method)
+    orderSubmitLock.current = true
+    try {
+      const next = await apiClient.createOrder(items, method, key)
+      if (version !== sessionVersion.current) throw new Error('Your session changed. Sign in to check Your Orders.')
+      rememberOrder(next)
+      if (next.payment === 'Paid') { clearCheckoutIntent(); setCart([]); void refresh(); return next }
+      if (next.checkout && next.status === 'Payment Pending') return await completePayment(next)
+      return next
+    } finally { orderSubmitLock.current = false }
   }
   const pickup = async () => { if(!order) return; const version = sessionVersion.current; const next = await apiClient.pickupOrder(order.orderId); if(version !== sessionVersion.current) throw new Error('Your session changed. Sign in to check Your Orders.'); setOrder(next); await refresh() }
   const markRead = async () => { const version = sessionVersion.current; await apiClient.markAllNotificationsRead(); if(version === sessionVersion.current) setNotifications(prev => prev.map(n => ({...n,unread:false}))) }
   const store: Store = {
-    screen, user, menu, orders, order, notifications, loading, error, refresh, selectOrder: setOrder, submitOrder, pickup, markRead,
+    screen, user, menu, orders, order, notifications, loading, error, refresh, selectOrder: setOrder, submitOrder, completePayment, pickup, markRead,
     go: next => { if(!user && next !== 'login') { setScreen('login'); return }; setScreen(next) }, loginUser, registerUser, logoutUser,
     cart, add: (item, qty = 1) => { if(!item.available) { showToast('This item is currently unavailable'); return }; setCart(prev => { const old = prev.find(l => l.item.id === item.id); return old ? prev.map(l => l.item.id === item.id ? {...l,qty:l.qty+qty} : l) : [...prev,{item,qty}] }); showToast(`${item.name} added`) },
     setQty: (id,qty) => setCart(prev => qty <= 0 ? prev.filter(l => l.item.id !== id) : prev.map(l => l.item.id === id ? {...l,qty} : l)), clear: () => setCart([]),

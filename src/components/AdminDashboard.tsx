@@ -1,4 +1,5 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
+import { adminOperationsApi } from '../lib/adminOperationsApi'
 import AdminSidebar, { MessSection, NavTab } from './AdminSidebar'
 import type { AdminUser } from '../lib/adminApi'
 import AdminHeader from './AdminHeader'
@@ -21,6 +22,19 @@ export default function AdminDashboard({
 }: AdminDashboardProps) {
   const [activeTab, setActiveTab] = useState<NavTab>('ala-carte')
   const [messSection, setMessSection] = useState<MessSection>('members')
+  const [operations, setOperations] = useState<{ serviceOnline: boolean; pendingOrders: number; activeWindow: string; redisAvailable: boolean } | null>(null)
+  useEffect(() => {
+    let active = true, inFlight = false
+    const load = async () => {
+      if (inFlight) return
+      inFlight = true
+      try { const next = await adminOperationsApi.operations(); if (active) setOperations(next) }
+      catch { if (active) setOperations(null) }
+      finally { inFlight = false }
+    }
+    void load(); const timer = setInterval(() => { if (document.visibilityState === 'visible') void load() }, 15000)
+    return () => { active = false; clearInterval(timer) }
+  }, [])
   const [toasts, setToasts] = useState<ToastMessage[]>([])
 
   const showToast = (
@@ -71,12 +85,12 @@ export default function AdminDashboard({
       case 'analytics':
         return {
           title: 'Canteen Sales & Footfall Analytics',
-          subtitle: 'Real-time statistics, popular items, and Redis cache hit ratios',
+          subtitle: 'Persisted order revenue, popular items, and available operational metrics',
         }
       case 'settings':
         return {
           title: 'Canteen Configuration',
-          subtitle: 'Kitchen timing windows, meal service cutoffs, and notification parameters',
+          subtitle: 'Current meal service windows and backend connectivity',
         }
     }
   }
@@ -93,14 +107,15 @@ export default function AdminDashboard({
         onSelectTab={setActiveTab}
         messSection={messSection}
         onSelectMessSection={section => { setMessSection(section); setActiveTab('mess-management') }}
-        pendingOrdersCount={4}
-        isLiveService={true}
+        pendingOrdersCount={operations?.pendingOrders ?? 0}
+        isLiveService={operations?.serviceOnline ?? false}
       />
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         {/* Sticky Header */}
         <AdminHeader
+          activeWindow={operations?.activeWindow ?? 'Unavailable'}
           title={title}
           subtitle={subtitle}
           onQuickAction={
@@ -116,13 +131,7 @@ export default function AdminDashboard({
           {activeTab === 'ocr-upload' && (
             <OcrMenuUpload
               onShowToast={showToast}
-              onScheduleSaved={() => {
-                showToast(
-                  'PostgreSQL Synchronized',
-                  'Weekly menu updated across all 7 days with Redis cache invalidation.',
-                  'success'
-                )
-              }}
+
             />
           )}
 
@@ -148,9 +157,10 @@ export default function AdminDashboard({
             <div className="max-w-4xl mx-auto p-8 rounded-3xl bg-white border border-[#E5DFD7] shadow-sm space-y-6">
               <h4 className="text-lg font-bold text-[#1D1A16]">Canteen Operating Windows</h4>
               <p className="text-xs text-stone-500">
-                Configure automated meal evaluation schedules used by <code>GET /api/menu/today</code>.
+                Current service windows are managed by the canteen configuration.
               </p>
 
+              <p className="text-xs text-stone-500">Active window: {operations?.activeWindow ?? 'Unavailable'} · Backend: {operations?.serviceOnline ? 'Connected' : 'Unavailable'}</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="p-4 rounded-2xl bg-[#FAF7F3] border border-[#E5DFD7]">
                   <p className="text-xs font-bold text-[#1D1A16]">🍳 Breakfast Window</p>

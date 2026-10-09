@@ -1,6 +1,18 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
+import { adminOperationsApi, type AdminAnalytics } from '../lib/adminOperationsApi'
 
 export default function AnalyticsView() {
+  const [data, setData] = useState<AdminAnalytics | null>(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let active = true
+    adminOperationsApi.analytics().then(result => { if (active) setData(result) }).catch(cause => { if (active) setError((cause as Error).message) })
+    return () => { active = false }
+  }, [])
+  const money = (value: number) => value.toLocaleString('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 })
+  const change = data && data.yesterdayRevenue > 0 ? ((data.dailyRevenue - data.yesterdayRevenue) / data.yesterdayRevenue * 100).toFixed(1) + '% from yesterday' : 'No prior revenue baseline'
+  const topItems = (data?.topItems || []).map(item => ({ name: item.name, orders: item.quantity, rev: money(item.revenue), pct: item.quantity / Math.max(1, ...((data?.topItems || []).map(row => row.quantity))) * 100 }))
+
   return (
     <div className="space-y-8 max-w-6xl mx-auto">
       <div>
@@ -12,30 +24,32 @@ export default function AnalyticsView() {
         </p>
       </div>
 
+      {error && <p role="alert" className="rounded-2xl bg-white p-4 text-sm text-red-700 border border-red-200">{error}</p>}
+      {!data && !error && <p role="status" className="text-sm text-stone-500">Loading analytics…</p>}
       {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
         <div className="p-6 rounded-3xl bg-white border border-[#E5DFD7] shadow-sm">
           <p className="text-xs font-bold uppercase tracking-wider text-stone-600">Daily Revenue</p>
-          <h4 className="text-2xl font-extrabold text-[#1D1A16] mt-1">₹48,920</h4>
-          <p className="text-[11px] text-emerald-700 font-semibold mt-1">↑ +14.2% from yesterday</p>
+          <h4 className="text-2xl font-extrabold text-[#1D1A16] mt-1">{data ? money(data.dailyRevenue) : '—'}</h4>
+          <p className="text-[11px] text-emerald-700 font-semibold mt-1">{change}</p>
         </div>
 
         <div className="p-6 rounded-3xl bg-white border border-[#E5DFD7] shadow-sm">
           <p className="text-xs font-bold uppercase tracking-wider text-stone-600">Active Students</p>
-          <h4 className="text-2xl font-extrabold text-[#1D1A16] mt-1">1,420</h4>
-          <p className="text-[11px] text-stone-500 font-medium mt-1">Peak: 12:45 - 13:30 (Lunch)</p>
+          <h4 className="text-2xl font-extrabold text-[#1D1A16] mt-1">{data ? data.activeStudents.toLocaleString('en-IN') : '—'}</h4>
+          <p className="text-[11px] text-stone-500 font-medium mt-1">{data ? data.totalOrders + ' orders today · ' + data.activeOrders + ' active' : 'Awaiting backend data'}</p>
         </div>
 
         <div className="p-6 rounded-3xl bg-white border border-[#E5DFD7] shadow-sm">
           <p className="text-xs font-bold uppercase tracking-wider text-stone-600">Redis Cache Hit</p>
-          <h4 className="text-2xl font-extrabold text-emerald-700 mt-1">99.4%</h4>
-          <p className="text-[11px] text-stone-500 font-medium mt-1">&lt; 3ms response time</p>
+          <h4 className="text-2xl font-extrabold text-emerald-700 mt-1">{data?.redisCacheHitPercent == null ? 'Unavailable' : data.redisCacheHitPercent + '%'}</h4>
+          <p className="text-[11px] text-stone-500 font-medium mt-1">Measured cache telemetry is not configured</p>
         </div>
 
         <div className="p-6 rounded-3xl bg-white border border-[#E5DFD7] shadow-sm">
           <p className="text-xs font-bold uppercase tracking-wider text-stone-600">Waste Reduction</p>
-          <h4 className="text-2xl font-extrabold text-[#F25C2C] mt-1">-28%</h4>
-          <p className="text-[11px] text-stone-500 font-medium mt-1">Smart count forecasting</p>
+          <h4 className="text-2xl font-extrabold text-[#F25C2C] mt-1">{data?.wasteReductionPercent == null ? 'Unavailable' : data.wasteReductionPercent + '%'}</h4>
+          <p className="text-[11px] text-stone-500 font-medium mt-1">Waste measurements are not configured</p>
         </div>
       </div>
 
@@ -46,12 +60,8 @@ export default function AnalyticsView() {
         </h4>
 
         <div className="space-y-3">
-          {[
-            { name: 'Cold Coffee with Ice Cream', orders: 92, pct: 92, rev: '₹6,900' },
-            { name: 'Crispy Peri-Peri French Fries', orders: 78, pct: 78, rev: '₹6,630' },
-            { name: 'Chicken Tikka Roll (Double Egg)', orders: 56, pct: 56, rev: '₹8,400' },
-            { name: 'Paneer Butter Masala (Single)', orders: 42, pct: 42, rev: '₹6,720' },
-          ].map((dish, i) => (
+          {data && !topItems.length && <p className="text-sm text-stone-500">No paid item sales today.</p>}
+          {topItems.map((dish, i) => (
             <div key={i} className="space-y-1.5">
               <div className="flex items-center justify-between text-xs font-bold">
                 <span className="text-[#1D1A16]">{dish.name}</span>

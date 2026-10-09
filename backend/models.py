@@ -4,8 +4,13 @@ from sqlalchemy import (
     Column,
     DateTime,
     Float,
+    Numeric,
+    CheckConstraint,
+    Index,
+    text,
     ForeignKey,
     Integer,
+    Sequence,
     String,
     Text,
     UniqueConstraint,
@@ -14,6 +19,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.types import JSON, TypeDecorator
 from database import Base
+
+# Reserve order numbers independently of database primary keys and legacy seeds.
+order_number_sequence = Sequence("canteen_order_number_seq", start=1001, metadata=Base.metadata)
 
 
 class DayOfWeek(str, enum.Enum):
@@ -34,6 +42,7 @@ class MealType(str, enum.Enum):
 
 
 class OrderStatusEnum(str, enum.Enum):
+    PAYMENT_PENDING = "Payment Pending"
     QUEUED = "Queued"
     PREPARING = "Preparing"
     READY = "Ready"
@@ -107,13 +116,17 @@ class AlaCarte(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     item_name = Column(String(100), unique=True, nullable=False, index=True)
-    price = Column(Float, nullable=False)
+    price = Column(Numeric(12, 2), nullable=False)
     timing_window = Column(String(50), nullable=False)  # e.g., '08:00-11:00', '12:00-15:00', 'all_day'
     is_available = Column(Boolean, default=True, nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("price >= 0 AND price < 10000000000", name="ck_ala_carte_price"),
     )
 
     def to_dict(self):
@@ -138,7 +151,7 @@ class FoodItem(Base):
     id = Column(String(50), primary_key=True, index=True)  # e.g., 'veg-burger'
     name = Column(String(100), unique=True, nullable=False, index=True)
     desc = Column(String(255), nullable=True)
-    price = Column(Float, nullable=False)
+    price = Column(Numeric(12, 2), nullable=False)
     category = Column(String(30), nullable=False, default="Snacks", index=True)  # Snacks, Meals, Beverages
     veg = Column(Boolean, default=True, nullable=False)
     is_available = Column(Boolean, default=True, nullable=False)
@@ -157,6 +170,10 @@ class FoodItem(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    __table_args__ = (
+        CheckConstraint("price >= 0 AND price < 10000000000", name="ck_food_items_price"),
+    )
+
     def to_dict(self):
         return {
             "id": self.id,
@@ -166,6 +183,7 @@ class FoodItem(Base):
             "category": self.category,
             "veg": self.veg,
             "available": self.is_available,
+            "timingWindow": self.timing_window,
             "prepMins": self.prep_mins,
             "rating": self.rating,
             "ratingCount": self.rating_count,
@@ -211,18 +229,22 @@ class StudentUser(Base):
     email = Column(String(100), unique=True, nullable=False, index=True)
     phone = Column(String(30), nullable=True)
     hashed_passcode = Column(String(255), nullable=False)
-    wallet_balance = Column(Float, default=250.0, nullable=False)  # ₹250 welcome bonus
+    wallet_balance = Column(Numeric(12, 2), default=0, server_default=text("0"), nullable=False)  # No unverified signup credit
     upi_id = Column(String(100), nullable=True)
     dietary_preference = Column(String(30), default="all", nullable=False)  # all, veg, non-veg, vegan
     favorites = Column(JSON, default=list)  # array of favorite food item IDs
     total_orders = Column(Integer, default=0, nullable=False)
-    total_spent = Column(Float, default=0.0, nullable=False)
+    total_spent = Column(Numeric(12, 2), default=0, nullable=False)
     saved_minutes = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("wallet_balance >= 0 AND wallet_balance < 10000000000 AND total_spent >= 0 AND total_spent < 10000000000", name="ck_students_money"),
     )
 
     def to_profile_dict(self):
@@ -260,10 +282,10 @@ class Order(Base):
     student_id = Column(String(50), ForeignKey("students.id"), nullable=False, index=True)
 
     items_json = Column(JSON, nullable=False, default=list)  # [{id, name, qty, price, customizations, photo}]
-    item_total = Column(Float, nullable=False)
-    packaging_fee = Column(Float, default=8.0, nullable=False)
-    gst_amount = Column(Float, default=0.0, nullable=False)
-    total_amount = Column(Float, nullable=False)
+    item_total = Column(Numeric(12, 2), nullable=False)
+    packaging_fee = Column(Numeric(12, 2), default=8, nullable=False)
+    gst_amount = Column(Numeric(12, 2), default=0, nullable=False)
+    total_amount = Column(Numeric(12, 2), nullable=False)
 
     payment_method = Column(String(30), default="wallet", nullable=False)  # 'wallet', 'upi', 'card', 'cash'
     payment_status = Column(String(20), default="Paid", nullable=False)  # 'Paid', 'Failed', 'Refunded'
@@ -277,6 +299,8 @@ class Order(Base):
     qr_code_data = Column(String(255), nullable=True)
     cancellation_reason = Column(String(255), nullable=True)
     special_instructions = Column(String(255), nullable=True)
+    idempotency_key = Column(String(128), nullable=True)
+    request_fingerprint = Column(String(64), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
@@ -284,6 +308,11 @@ class Order(Base):
     )
     ready_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("item_total >= 0 AND packaging_fee >= 0 AND gst_amount >= 0 AND total_amount >= 0 AND total_amount < 10000000000", name="ck_orders_money"),
+        UniqueConstraint("student_id", "idempotency_key", name="uq_orders_student_idempotency"),
+    )
 
     def to_dict(self):
         return {
@@ -326,15 +355,26 @@ class WalletTransaction(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     student_id = Column(String(50), ForeignKey("students.id"), nullable=False, index=True)
-    amount = Column(Float, nullable=False)
+    amount = Column(Numeric(12, 2), nullable=False)
     transaction_type = Column(String(20), nullable=False)  # 'credit', 'debit'
     payment_method = Column(String(30), default="UPI", nullable=False)  # 'UPI', 'Card', 'Wallet', 'Bonus'
     description = Column(String(255), nullable=False)
-    order_id = Column(Integer, nullable=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
     reference_id = Column(String(100), nullable=True)
+    payment_intent_id = Column(Integer, ForeignKey("payment_intents.id"), nullable=True)
     status = Column(String(20), default="success", nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        CheckConstraint("amount >= 0 AND amount < 10000000000", name="ck_wallet_transactions_amount"),
+        Index("uq_wallet_payment_success", "student_id", "payment_intent_id", "transaction_type", unique=True,
+              postgresql_where=text("payment_intent_id IS NOT NULL AND status = 'success'"),
+              sqlite_where=text("payment_intent_id IS NOT NULL AND status = 'success'")),
+        Index("uq_wallet_order_success", "student_id", "order_id", "transaction_type", unique=True,
+              postgresql_where=text("order_id IS NOT NULL AND status = 'success'"),
+              sqlite_where=text("order_id IS NOT NULL AND status = 'success'")),
+    )
 
     def to_dict(self):
         return {
@@ -370,7 +410,7 @@ class Notification(Base):
     notification_type = Column(String(30), default="order_update", nullable=False)  # 'order_update', 'promo', 'stock_alert', 'system'
     emoji = Column(String(10), default="🔔", nullable=False)
     color_theme = Column(String(20), default="mint", nullable=False)  # mint, tangerine, slate, amber, berry
-    order_id = Column(Integer, nullable=True)
+    order_id = Column(Integer, ForeignKey("orders.id"), nullable=True)
     is_read = Column(Boolean, default=False, nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -451,7 +491,7 @@ class PasswordResetOtp(Base):
 
 
 # Monthly mess membership and immutable meal audit records.
-from sqlalchemy import Date, Numeric, CheckConstraint, Index, text
+from sqlalchemy import Date
 
 
 class MessPlan(Base):
@@ -520,3 +560,13 @@ class MessMealAttendance(Base):
         CheckConstraint("status IN ('Taken','Reversed')", name="ck_mess_attendance_status"),
         CheckConstraint("token_before > 0 AND token_after = token_before - 1", name="ck_mess_ledger_deduction"),
     )
+
+
+class NotificationRead(Base):
+    """Per-student receipt; reading a broadcast never changes another student."""
+    __tablename__ = "notification_reads"
+    id = Column(Integer, primary_key=True)
+    student_id = Column(String(50), ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
+    notification_id = Column(Integer, ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True)
+    read_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    __table_args__ = (UniqueConstraint("student_id", "notification_id", name="uq_notification_reads_student_notification"),)

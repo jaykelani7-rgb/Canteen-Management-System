@@ -1,0 +1,296 @@
+# ₹0 staging: setup and deployment checklist
+
+Updated 9 October 2026. **No backend HTTPS URL has been deployed or verified.**
+The installed Android APK still contains its staging-backend placeholder and must
+remain unchanged until the real backend passes the checks below.
+
+Account/resource order: **Neon → Upstash → Render → Cloudflare Pages**.
+Use Free plans for the 40–50-person pilot. Free sleep/quotas are testing limitations;
+this is not an always-on production promise for the later 500-student rollout.
+Do not upgrade, enable automatic paid overages, buy a domain or add paid resources
+without explicit approval. Use the providers' included HTTPS domains.
+
+## What Codex has completed locally
+
+- Reviewed `backend/Dockerfile`: repository-root build context; image command
+  `python start_server.py`; listens on `0.0.0.0` using `PORT`.
+- Prepared [render.yaml](../render.yaml) for one Free Docker web service from
+  GitHub branch `krishna`, with automatic deploys/previews disabled. **A separate
+  container registry is not required:** Render builds the Dockerfile directly.
+  See [Render Docker deployment](https://render.com/docs/docker).
+- Prepared [managed environment template](../deployment/backend.managed-staging.example),
+  [offline configuration preflight](../deployment/check_managed_configuration.py),
+  [database/backup runbook](DATABASE_DEPLOYMENT.md) and a guarded runtime-role helper.
+- Prepared the guarded Pages builder: it requires the real API/Student/Admin
+  HTTPS origins, verifies API health/readiness, builds both existing web apps and
+  emits public CORS metadata outside their upload directories.
+
+These files/configuration are local preparation, not cloud deployment evidence.
+Existing source, database rows, credentials and the installed APK are preserved.
+Neon, Render, Cloudflare and Upstash sign-in have been confirmed in this session;
+account login alone does not provision or verify a service.
+
+Neon Free `canteen-staging` (PostgreSQL 16/Singapore, database
+`canteen_staging`) and Upstash Free `canteen-staging` (Singapore/TLS) were
+created with explicit owner approval. Their creation does not establish that
+data has been restored or backend health/readiness has passed.
+
+The two existing empty Cloudflare projects, `canteenos-student-krishna` and
+`canteenos-admin-krishna`, are **Direct Upload**, with no Git connection. Preserve
+them. Cloudflare cannot convert a Direct Upload project to Git integration;
+create separate Git-integrated projects using the settings in section 4.
+
+The owner has explicitly approved publication of reviewed deployment changes
+only to `krishna`, and private staging credentials only in local migration tools
+and Render managed secrets. Never publish credentials or modify `main`.
+Render must use the reviewed current source, not an older checkout missing the
+Dockerfile, migrations or transitive application modules. Verify the actual
+published revision during deployment.
+
+## 1. Neon — owner dashboard actions
+
+Open [Neon Console](https://console.neon.tech), remain on **Free**, enable MFA and
+create/select an isolated staging project after approving its free creation.
+
+| Field | Select |
+| --- | --- |
+| Project | `canteen-staging` or an available staging name |
+| PostgreSQL | **16**, matching the existing local database |
+| Region | Singapore if available on Free; otherwise review latency before choosing |
+| Application database | `canteen_staging` |
+| Environment | Staging only; separate from future production resources |
+
+The existing auto-created project `falling-dream-56289503` is Free, PostgreSQL 18,
+Virginia, with a provider-named `production` branch. **Do not delete, reset, alter
+or silently repurpose it.** A provider branch label is not evidence that the
+Canteen application has been deployed there. If the Free quota prevents a separate
+PostgreSQL 16 target, stop and review instead of upgrading or replacing data.
+
+Keep credentials in a password manager/private provider settings, never chat.
+Retain the **direct** endpoint for migrations and backups. Use a distinct limited
+runtime role for Render; do not give the running API the database-owner credential.
+Supply the direct owner connection as `MIGRATION_DATABASE_URL` only in the private
+operator process environment; it overrides the migration connection without
+putting that credential in the running service's `DATABASE_URL`.
+The runtime SQLAlchemy URL uses `postgresql+asyncpg` and `?ssl=verify-full`;
+remove Neon/libpq-only `sslmode` and `channel_binding` parameters when preparing
+that private value. A compatible pooled endpoint may be used for API traffic.
+
+**Preserve data before migration:** follow [DATABASE_DEPLOYMENT.md](DATABASE_DEPLOYMENT.md).
+The original local database was audited read-only: PostgreSQL **16.15**, database
+`canteen_db`, already at **`0005_secure_recovery`**, with existing application data.
+Its original container and `backend_postgres_data` volume remain preserved.
+An approved full copy at this head needs restoration/verification, not a legacy
+stamp or unnecessary upgrade. These observations do not prove a cloud copy exists.
+Record the source identity, take an encrypted backup and rehearse restoration only
+into an explicitly verified **empty** staging destination. For general testers,
+use authorized sanitized data. Preserve the original records, IDs, password hashes,
+wallet/order totals, attendance and sequence state. Do not seed/reset the source,
+restore over populated tables, use `--clean`, drop tables or stamp `head` to hide drift.
+
+From `backend`, using the operator's private migration environment/direct TLS
+connection and a readable CA bundle:
+
+```powershell
+python -m alembic -c alembic.ini current
+python -m alembic -c alembic.ini heads
+```
+
+The reviewed head is **`0005_secure_recovery`**. When an upgrade is appropriate,
+the exact command from `backend` is `python -m alembic -c alembic.ini upgrade head`.
+Restore the full approved archive
+before running upgrades when relocating existing records. A restored database at
+head needs no upgrade; a behind revision uses reviewed `upgrade head`. A legacy
+database without revision metadata first needs `adopt_legacy_schema.py` read-only
+preflight and explicit baseline adoption, as documented in the runbook. A genuinely
+empty fresh schema may use migrations directly only when preserving imported
+records is not the objective. Run one migration job, never a startup hook.
+
+After the selected staging target is safely at head, use
+[provision_runtime_role.py](../deployment/database/provision_runtime_role.py) with
+a private named libpq service (`sslmode=verify-full`, CA/password files outside the
+repository). Supply its actual `--service`, `--expected-database`, `--expected-host`,
+`--migration-owner` and distinct `--runtime-role`; defaults are read-only.
+Only an approved invocation with `--apply` creates a **new** role after hidden
+password prompts and ownership/schema checks. It refuses existing roles, changes
+no application rows and grants only application DML/sequences plus read access to
+`alembic_version`. Never pass a connection string/password as a CLI argument.
+
+## 2. Upstash — owner dashboard actions
+
+Open [Upstash Console](https://console.upstash.com) → Redis → create/select an
+account-owned **Free** database after approving its free creation.
+
+- Name: `canteen-staging`; choose the nearest available Free region to the API.
+- Keep Free billing and TLS enabled; review the displayed free quota before saving.
+- Obtain the **Redis TCP/TLS** endpoint privately. The backend uses a `rediss://`
+  connection with verified certificates/hostnames, **not** the REST URL/token.
+- Do not flush/delete existing Redis databases, use an expiring accountless
+  instance or reuse production caches/rate-limit counters for staging.
+
+Redis is required for distributed authentication rate limits and `/api/ready`;
+do not disable rate limiting to avoid this resource. See
+[Upstash Free pricing/quotas](https://upstash.com/pricing/redis).
+
+## 3. Render — owner dashboard actions
+
+First finish the approved source-publication prerequisite and safe database
+preparation. Open [Render Dashboard](https://dashboard.render.com) → New → Web
+Service → connect the existing GitHub repository. Authorize only the needed repo.
+The manual settings below correspond to the prepared Blueprint; do not create
+both a manual service and a duplicate Blueprint service.
+
+| Field | Exact setting |
+| --- | --- |
+| Repository | `jaykelani7-rgb/Canteen-Management-System` |
+| Branch | **`krishna`**, containing the complete reviewed current source |
+| Name | `canteen-staging-api` or an available unique staging name |
+| Region | Singapore, coordinated with the database |
+| Runtime | Docker |
+| Instance/plan | **Free** |
+| Root directory | Leave blank: repository root |
+| Dockerfile path | `backend/Dockerfile` |
+| Docker build context | `.`: repository root, not `backend` |
+| Docker command | Leave blank to inherit `python start_server.py` |
+| Health-check path | **`/api/health`** |
+| Automatic deploys / previews | Off |
+
+Do not select Existing Image, add a registry, create Render PostgreSQL/Key Value,
+enable a persistent disk or add a paid pre-deploy job for this architecture.
+Render Free has no interactive shell/pre-deploy command support; run the reviewed
+migrations from the authorized operator machine. Startup checks the migration head
+and **never** migrates, creates tables or seeds users.
+
+Enter private values directly in Render Environment/managed secrets:
+**`DATABASE_URL`** (limited runtime account), **`REDIS_URL`**, and a fresh random
+**`SECRET_KEY`** of at least 32 bytes. Do not print them, send them in chat or place
+them in `VITE_*`, Android assets, Git, deployment logs or Cloudflare Pages.
+
+Enter every nonsecret setting from the template:
+
+| Environment variable | Value |
+| --- | --- |
+| `ENVIRONMENT` | `production` — security mode, despite isolated staging resources |
+| `PORT` | `10000` |
+| `WEB_CONCURRENCY` | `1` |
+| `DATABASE_POOL_SIZE` / `DATABASE_MAX_OVERFLOW` | `2` / `3` |
+| `PGSSLROOTCERT` | `/etc/ssl/certs/ca-certificates.crt` |
+| `SESSION_COOKIE_MODE_ENABLED` | `false` — cross-provider/native Bearer authentication |
+| `RATE_LIMIT_ENABLED` | `true` |
+| `AUTO_CREATE_SCHEMA` / `ENABLE_DEMO_DATA` | `false` / `false` |
+| `PAYMENT_PROVIDER` | `disabled` |
+| `PASSCODE_RECOVERY_ENABLED` | `false` — current SMTP transport is blocked on Render Free |
+| `TRUSTED_HOSTS` | JSON array of the **assigned actual API hostname** and `127.0.0.1` |
+| `CORS_ORIGINS` | Initially `["https://localhost"]` for bundled Android |
+| `STUDENT_CORS_ORIGINS` / `ADMIN_CORS_ORIGINS` | Initially `[]` / `[]`; fill actual separate Pages origins before web use |
+
+`https://localhost` above is Capacitor's bundled app **origin**, never the backend
+URL. Do not enable Admin cookie authentication for it. No wildcard origins/hosts.
+Optional OCR/provider integration secrets belong only in backend-managed settings;
+do not invent credentials or enable live payments to make a test succeed.
+
+Use the real assigned `onrender.com` address shown by Render, including any suffix;
+do not guess it from the proposed name. Service creation can trigger an initial
+attempt before configuration/migrations are complete. Keep that attempt unaccepted,
+finish private operator settings/migrations/runtime role, enter the assigned host,
+then manually deploy again. No deployment success is claimed until both public
+checks pass. The offline `deployment/check_managed_configuration.py` can validate
+the operator's private process environment without connecting or printing values;
+`--local-ca` checks the migration workstation's PEM trust bundle.
+
+### Public acceptance gate — before any Android rebuild
+
+From outside the provider network, request the actual HTTPS base origin plus:
+
+- **`/api/health`**: HTTP 200 JSON **`{"status":"alive"}`**.
+- **`/api/ready`**: HTTP 200 JSON with **`status="ready"`, `database=true`, `redis=true`**.
+
+An HTML wake-up page, redirect, 200 response with wrong JSON or readiness 503 is
+not acceptance. Use a trusted HTTPS certificate and the intended deployed revision.
+Allow legitimate cold wake-up, then deliberately retry; do not continuously poll
+database readiness or use a keep-awake workaround. Render Free sleeps after idle
+traffic and can take about a minute to wake; this is a stated pilot limitation.
+See [Render Free limitations](https://render.com/docs/free).
+
+## 4. Cloudflare Pages — owner account/project actions, then local builds
+
+Remain on Free at [Cloudflare Dashboard](https://dash.cloudflare.com).
+Preserve the two existing empty Direct Upload projects. For automatic deployment
+from the approved repository, create **new Git-integrated Pages projects**:
+
+| Field | Student | Admin |
+| --- | --- | --- |
+| Suggested project name | `canteenos-student-krishna-git` | `canteenos-admin-krishna-git` |
+| Repository | `jaykelani7-rgb/Canteen-Management-System` | Same repository |
+| Production branch | `krishna` | `krishna` |
+| Framework preset | None | None |
+| Root directory | Blank | Blank |
+| Build command | `pnpm run build:pages` | `pnpm run build:pages` |
+| Build output directory | `dist/student` | `dist/admin` |
+| `NODE_VERSION` | `22.22.0` | `22.22.0` |
+| `PNPM_VERSION` | `10.34.3` | `10.34.3` |
+
+Workers & Pages → Create application → Pages → Connect to Git. Authorize only
+the named repository. Copy each **actually assigned** `pages.dev` HTTPS origin
+from the dashboard; never guess it or treat project creation as deployment.
+Both projects require the three public build variables `VITE_API_BASE_URL`,
+`VITE_STUDENT_APP_URL`, and `VITE_ADMIN_APP_URL`, using the real verified API and
+assigned project origins. No database, Redis, JWT or provider secret belongs here.
+
+The build helper checks actual backend health/readiness, builds both web apps
+with Bearer authentication, and each project publishes only its own output.
+An initial build before URLs/configuration are complete must remain unaccepted;
+finish the actual configuration and redeploy. Direct Upload projects cannot
+convert to Git integration. See [official Direct Upload documentation](https://developers.cloudflare.com/pages/get-started/direct-upload/).
+
+After the backend passes public acceptance, set the three **public** process-only
+origins from the real dashboards, with no paths or trailing `/api`:
+
+```powershell
+Set-Location 'C:\Users\isran\Desktop\Canteen-Management-System'
+$env:VITE_API_BASE_URL = (Read-Host 'Actual verified HTTPS API origin').Trim()
+$env:VITE_STUDENT_APP_URL = (Read-Host 'Actual Student Pages HTTPS origin').Trim()
+$env:VITE_ADMIN_APP_URL = (Read-Host 'Actual Admin Pages HTTPS origin').Trim()
+pnpm run test:pages
+if ($LASTEXITCODE -ne 0) { throw 'Pages configuration tests failed.' }
+pnpm run build:pages
+if ($LASTEXITCODE -ne 0) { throw 'Backend health/readiness or Pages build failed.' }
+```
+
+The builder rejects unsafe origins, forces `VITE_AUTH_COOKIE_MODE=false`/web mode,
+checks exact external API JSON, then builds **Student → `dist/student`** and
+**Admin → `dist/admin`** with the same API base. Dashboard environment changes do
+not alter already-built Direct Upload JavaScript; rebuild when a public URL changes.
+
+Use the public `dist/pages-deployment.json` to update Render's exact global/role
+CORS arrays and trusted hosts, preserving the native origin. Keep cookie mode off.
+Do not upload this metadata, a `.env`, repository source or the parent `dist` folder.
+If later synchronizing the Blueprint, first reflect the real CORS values there so
+it does not restore the native-only bootstrap defaults.
+
+In each new Git-integrated project, enter the public build variables above,
+then deploy the approved `krishna` revision. Verify that Student publishes only
+`dist/student` and Admin only `dist/admin`. Environment changes require rebuilds.
+
+Verify both actual HTTPS sites, Student PWA isolation, login/menu and authorized
+order/history/tracking, plus Admin status reflection against the same staging DB.
+Use disabled payments or an approved verified provider sandbox, never fake capture
+or live merchant credentials. Do not reset balances/data to make tests pass.
+
+## 5. Android cutover — only after verified backend health/readiness
+
+Follow [ANDROID_DEPLOYMENT.md](ANDROID_DEPLOYMENT.md). Set only the verified public
+`CAPACITOR_API_BASE_URL`, run production URL validation, build/sync the Student
+assets, verify the embedded API URL, then build/install the new debug APK with the
+existing signing key. The source pipeline must not substitute a staging placeholder
+or temporary tunnel, and the current APK must remain untouched while the backend
+is not ready. A production frontend mode still produces a debug-signed test APK.
+
+Physical-phone login/menu/order/tracking and graceful failures still need actual
+testing after cutover. Future production requires separate resources, credentials,
+origins, backups and capacity checks; do not point testing at live college tables.
+
+**Next action:** preserve and restore the existing records into the approved
+empty Neon staging database, provision the restricted runtime role, deploy Render,
+and accept only real external health/readiness before frontend or APK release.
+No private credentials are needed in chat.

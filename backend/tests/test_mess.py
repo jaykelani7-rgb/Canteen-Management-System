@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.schema import CreateSchema, DropSchema
 
-from auth import create_access_token, get_password_hash
+from auth import create_access_token, get_password_hash, credential_fingerprint
 from database import Base, get_db
 from main import app
 from models import AdminUser, StudentUser, MessSubscription, MessMealAttendance
@@ -49,7 +49,8 @@ async def mess_client(monkeypatch):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     async with sessions() as db:
-        db.add(AdminUser(username="test-admin", hashed_password=get_password_hash("test-password"), role="admin", is_active=True))
+        admin_password_hash = get_password_hash("test-password")
+        db.add(AdminUser(username="test-admin", hashed_password=admin_password_hash, role="admin", is_active=True))
         db.add(StudentUser(id="linked-student", roll_number="21CS1042", name="Aarav Sharma", email="aarav@test.invalid", hashed_passcode="unused", branch="CS"))
         await mess_routes.ensure_mess_plans(db)
         await db.commit()
@@ -61,7 +62,7 @@ async def mess_client(monkeypatch):
                 await db.rollback()
                 raise
     app.dependency_overrides[get_db] = override_db
-    token = create_access_token({"sub": "test-admin", "role": "admin"})
+    token = create_access_token({"sub": "test-admin", "role": "admin", "credential_version": credential_fingerprint(admin_password_hash)})
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers={"Authorization": "Bearer " + token}) as client:
             yield client, sessions, postgres

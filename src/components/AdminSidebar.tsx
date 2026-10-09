@@ -36,8 +36,8 @@ export default function AdminSidebar({
   onSelectMessSection,
   activeTab,
   onSelectTab,
-  pendingOrdersCount = 6,
-  isLiveService = true,
+  pendingOrdersCount = 0,
+  isLiveService = false,
 }: SidebarProps) {
   const [messExpanded, setMessExpanded] = useState(false)
   const navItems: {
@@ -209,11 +209,11 @@ export default function AdminSidebar({
         <div className="shrink-0 mx-1 mb-6 px-3.5 py-2.5 rounded-2xl bg-white border border-[#E5DFD7] shadow-sm flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+              <span className={isLiveService ? 'animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75' : 'hidden'}></span>
+              <span className={'relative inline-flex rounded-full h-2.5 w-2.5 ' + (isLiveService ? 'bg-emerald-500' : 'bg-amber-500')}></span>
             </span>
             <span className="text-xs font-semibold text-[#1D1A16]">
-              {isLiveService ? 'Service Online' : 'Kitchen Paused'}
+              {isLiveService ? 'Service Online' : 'Service Unavailable'}
             </span>
           </div>
           <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-stone-100 text-stone-600 border border-stone-200">

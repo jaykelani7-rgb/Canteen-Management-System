@@ -6,3 +6,7 @@ body { background: var(--color-paper); overscroll-behavior-y: none; }
 .student-shell > div { padding-top: env(safe-area-inset-top); }
 .student-shell input, .student-shell select { font-size: max(16px, 1em); }
 @media (min-width: 641px) { .student-shell { box-shadow: 0 0 48px rgba(29, 26, 22, 0.08); } }
+
+/* Staging notice occupies its own row without covering existing Student controls. */
+.native-staging-shell { display: flex; height: 100dvh; flex-direction: column; }
+.native-staging-shell > .student-shell { height: auto; flex: 1; }

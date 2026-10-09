@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 
 interface AdminHeaderProps {
+  activeWindow?: string
   title: string
   subtitle: string
   onQuickAction?: () => void
@@ -8,6 +9,7 @@ interface AdminHeaderProps {
 }
 
 export default function AdminHeader({
+  activeWindow = 'Unavailable',
   title,
   subtitle,
   onQuickAction,
@@ -22,10 +24,10 @@ export default function AdminHeader({
     const updateTime = () => {
       const now = new Date()
       setTimeStr(
-        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        now.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' })
       )
       setDayStr(
-        now.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+        now.toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'long', month: 'short', day: 'numeric' })
       )
     }
     updateTime()
@@ -72,7 +74,7 @@ export default function AdminHeader({
         {/* Canteen Service Window Pill */}
         <div className="hidden md:flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-50 border border-amber-200/80 text-amber-900 text-xs font-semibold">
           <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-          <span>Active Window: Lunch (12:00 - 15:00)</span>
+          <span>Active Window: {activeWindow}</span>
         </div>
 
         {/* The student frontend runs independently of the admin workspace. */}

@@ -1,4 +1,5 @@
 import json
+from urllib.parse import urlsplit
 from typing import Any, AsyncGenerator, Optional
 import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import (
@@ -12,15 +13,14 @@ from sqlalchemy.orm import declarative_base
 from config import settings
 
 # -------------------------------------------------------------------------
-# PostgreSQL Async Engine & Session Factory
+# Database Engine & Session Factory (Supports PostgreSQL & SQLite)
 # -------------------------------------------------------------------------
+is_sqlite = settings.DATABASE_URL.startswith("sqlite")
 engine: AsyncEngine = create_async_engine(
     settings.DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
-    pool_size=20,
-    max_overflow=10,
-    connect_args={"statement_cache_size": 0},
+    **({"connect_args": {"check_same_thread": False}} if is_sqlite else {"pool_size": settings.DATABASE_POOL_SIZE, "max_overflow": settings.DATABASE_MAX_OVERFLOW, "connect_args": {"statement_cache_size": 0}}),
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -56,11 +56,22 @@ def get_redis_client() -> aioredis.Redis:
     """Returns the global async Redis client instance."""
     global redis_client
     if redis_client is None:
+        redis_url = settings.REDIS_URL
+        parsed = urlsplit(redis_url)
+        # Docker Desktop publishes IPv4 loopback; Windows may resolve localhost to IPv6 first.
+        # Keep production and TLS hostnames intact, including their certificate validation.
+        if settings.ENVIRONMENT != "production" and parsed.scheme == "redis" and parsed.hostname == "localhost":
+            account = parsed.netloc.rsplit("@", 1)[0] + "@" if "@" in parsed.netloc else ""
+            redis_url = parsed._replace(netloc=account + "127.0.0.1:" + str(parsed.port or 6379)).geturl()
         redis_client = aioredis.from_url(
-            settings.REDIS_URL,
+            redis_url,
             encoding="utf-8",
             decode_responses=True,
             max_connections=50,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            retry_on_timeout=False,
+            health_check_interval=30,
         )
     return redis_client
 
@@ -79,7 +90,7 @@ async def cache_get(key: str) -> Optional[Any]:
             return json.loads(raw_val)
     except Exception as e:
         # Graceful degradation if Redis is temporarily unreachable
-        print(f"[Redis Warning] Cache GET error for key '{key}': {e}")
+        print(f"[Redis Warning] Cache GET error for key '{key}': {type(e).__name__}")
     return None
 
 
@@ -91,7 +102,7 @@ async def cache_set(key: str, value: Any, ttl_seconds: int = settings.CACHE_TTL_
         await client.set(key, serialized, ex=ttl_seconds)
         return True
     except Exception as e:
-        print(f"[Redis Warning] Cache SET error for key '{key}': {e}")
+        print(f"[Redis Warning] Cache SET error for key '{key}': {type(e).__name__}")
         return False
 
 
@@ -106,7 +117,7 @@ async def cache_invalidate_prefix(prefix: str) -> int:
             await client.delete(*keys)
             return len(keys)
     except Exception as e:
-        print(f"[Redis Warning] Cache Invalidation error for prefix '{prefix}': {e}")
+        print(f"[Redis Warning] Cache Invalidation error for prefix '{prefix}': {type(e).__name__}")
     return 0
 
 
@@ -115,5 +126,7 @@ async def cache_invalidate_prefix(prefix: str) -> int:
 # -------------------------------------------------------------------------
 async def init_db() -> None:
     """Create all tables in the database if they do not already exist."""
+    if getattr(settings, "ENVIRONMENT", "development") == "production":
+        raise RuntimeError("Production schema changes must use reviewed Alembic migrations")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

@@ -1,67 +1,38 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
+import { adminOperationsApi, type WeeklyMeal } from '../lib/adminOperationsApi'
 
 interface WeeklyScheduleViewProps {
   onShowToast?: (title: string, description?: string, type?: 'success' | 'info' | 'warning' | 'error') => void
   onNavigateToUpload?: () => void
 }
 
-const DEFAULT_WEEKLY_SCHEDULE: Record<
-  string,
-  { breakfast: string[]; lunch: string[]; snacks: string[]; dinner: string[] }
-> = {
-  Monday: {
-    breakfast: ['Idli', 'Medu Vada', 'Sambar', 'Coconut Chutney', 'Filter Coffee'],
-    lunch: ['Basmati Rice', 'Dal Tadka', 'Paneer Butter Masala', 'Chapati', 'Gulab Jamun'],
-    snacks: ['Samosa with Mint Chutney', 'Ginger Cardamom Tea'],
-    dinner: ['Jeera Rice', 'Dal Makhani', 'Mixed Veg Curry', 'Tandoori Roti', 'Ice Cream'],
-  },
-  Tuesday: {
-    breakfast: ['Masala Poha', 'Boiled Eggs', 'Sprouts Salad', 'Coffee'],
-    lunch: ['Veg Biryani', 'Mirchi Ka Salan', 'Boondi Raita', 'Phulka'],
-    snacks: ['Pani Puri / Sev Puri', 'Masala Chai'],
-    dinner: ['Ghee Rice', 'Chole Masala', 'Bhature', 'Kheer'],
-  },
-  Wednesday: {
-    breakfast: ['Aloo Paratha with Butter', 'Curd & Pickle', 'Fresh Fruits', 'Tea'],
-    lunch: ['Steamed Rice', 'Kadhai Paneer / Chicken Curry', 'Dal Fry', 'Roti'],
-    snacks: ['Veg Cutlet', 'Tomato Sauce', 'Tea'],
-    dinner: ['Fried Rice', 'Chilli Paneer', 'Hot & Sour Soup', 'Brownie'],
-  },
-  Thursday: {
-    breakfast: ['Mysore Masala Dosa', 'Tomato Chutney', 'Filter Coffee'],
-    lunch: ['Lemon Rice', 'Avial', 'Sambhar', 'Curd Rice'],
-    snacks: ['Bhel Puri', 'Cold Coffee'],
-    dinner: ['Palak Paneer', 'Rajma Masala', 'Basmati Rice', 'Rasgulla'],
-  },
-  Friday: {
-    breakfast: ['Upma', 'Boiled Egg / Banana', 'Coconut Chutney', 'Tea'],
-    lunch: ['Hyderabadi Dum Biryani', 'Salad', 'Raita', 'Gulab Jamun'],
-    snacks: ['Pav Bhaji', 'Masala Butter Milk'],
-    dinner: ['Butter Chicken / Shahi Paneer', 'Dal Tadka', 'Naan', 'Pastry'],
-  },
-  Saturday: {
-    breakfast: ['Puri Bhaji', 'Suji Halwa', 'Tea / Coffee'],
-    lunch: ['Rajma Chawal', 'Mixed Veg Raita', 'Chapati', 'Papad'],
-    snacks: ['Grilled Cheese Sandwich', 'Fresh Juice'],
-    dinner: ['Pasta Alfredo', 'Garlic Bread', 'Caesar Salad', 'Choco Lava Cake'],
-  },
-  Sunday: {
-    breakfast: ['Chole Bhature', 'Lassi', 'Pickle', 'Sweet Jalebi'],
-    lunch: ['Special Sunday Thali (2 Curries, Dal, Rice, Roti, Sweet, Papad)'],
-    snacks: ['Kachori with Sweet Chutney', 'Chai'],
-    dinner: ['Special Biryani Feast', 'Raita', 'Double Ka Meetha'],
-  },
-}
+type DaySchedule = { breakfast: string[]; lunch: string[]; snacks: string[]; dinner: string[] }
+const emptyDay = (): DaySchedule => ({ breakfast: [], lunch: [], snacks: [], dinner: [] })
 
 export default function WeeklyScheduleView({
-  onShowToast,
   onNavigateToUpload,
 }: WeeklyScheduleViewProps) {
-  const [schedule, setSchedule] = useState(DEFAULT_WEEKLY_SCHEDULE)
-  const [selectedDay, setSelectedDay] = useState<string>('Monday')
+  const [schedule, setSchedule] = useState<Record<string, DaySchedule>>({})
+  const [selectedDay, setSelectedDay] = useState<string>(new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'long' }))
 
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let active = true
+    adminOperationsApi.weeklyMenu().then(body => {
+      const rows = Array.isArray(body) ? body as WeeklyMeal[] : (body as { schedule?: WeeklyMeal[] }).schedule || []
+      const next: Record<string, DaySchedule> = {}
+      for (const meal of rows) {
+        if (!['breakfast', 'lunch', 'snacks', 'dinner'].includes(meal.meal_type) || !Array.isArray(meal.items)) continue
+        next[meal.day] ||= emptyDay()
+        next[meal.day][meal.meal_type] = meal.items
+      }
+      if (active) setSchedule(next)
+    }).catch(cause => { if (active) setError((cause as Error).message) }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-  const currentSchedule = schedule[selectedDay] || schedule['Monday']
+  const currentSchedule = schedule[selectedDay] || emptyDay()
 
   return (
     <div className="space-y-8 max-w-6xl mx-auto">
@@ -97,6 +68,9 @@ export default function WeeklyScheduleView({
         </button>
       </div>
 
+      {loading && <p role="status" className="text-sm text-stone-500">Loading weekly menu…</p>}
+      {error && <p role="alert" className="rounded-2xl border border-red-200 bg-white p-4 text-sm text-red-700">{error}</p>}
+      {!loading && !error && !schedule[selectedDay] && <p className="text-sm text-stone-500">No menu has been saved for {selectedDay}.</p>}
       {/* Day Selector Pills */}
       <div className="flex items-center gap-2 overflow-x-auto pb-2 no-scrollbar">
         {days.map((day) => {

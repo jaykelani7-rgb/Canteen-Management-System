@@ -1,0 +1,22 @@
+# Managed FREE staging: fill only through provider private secret settings.
+# No localhost/documentation backend URL is acceptable in a published build.
+ENVIRONMENT=production
+PORT=10000
+WEB_CONCURRENCY=1
+DATABASE_URL=
+PGSSLROOTCERT=/etc/ssl/certs/ca-certificates.crt
+# Use postgresql+asyncpg URL with ssl=verify-full; do not copy sslmode/channel_binding.
+REDIS_URL=
+SECRET_KEY=
+CORS_ORIGINS=
+STUDENT_CORS_ORIGINS=
+ADMIN_CORS_ORIGINS=
+TRUSTED_HOSTS=
+DATABASE_POOL_SIZE=2
+DATABASE_MAX_OVERFLOW=3
+AUTO_CREATE_SCHEMA=false
+ENABLE_DEMO_DATA=false
+SESSION_COOKIE_MODE_ENABLED=false
+RATE_LIMIT_ENABLED=true
+PAYMENT_PROVIDER=disabled
+PASSCODE_RECOVERY_ENABLED=false

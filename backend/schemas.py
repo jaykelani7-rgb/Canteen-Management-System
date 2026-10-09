@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Literal, Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 from models import DayOfWeek, MealType, OrderStatusEnum, PaymentStatusEnum
 
@@ -159,6 +159,8 @@ class TokenPayload(BaseModel):
     role: Optional[str] = None
     exp: Optional[int] = None
 
+    credential_version: Optional[str] = None
+
 
 class AdminUserResponse(BaseModel):
     id: int
@@ -243,8 +245,9 @@ class FavoritesToggleResponse(BaseModel):
 # 4. WALLET & TRANSACTION SCHEMAS
 # =========================================================================
 class WalletRechargeRequest(BaseModel):
-    amount: float = Field(..., gt=0, le=10000, description="Amount to recharge in INR", examples=[200.0])
-    paymentMethod: str = Field("UPI", examples=["UPI", "Card", "NetBanking"])
+    model_config = ConfigDict(extra="forbid")
+    amount: Decimal = Field(..., ge=1, le=10000, max_digits=7, decimal_places=2)
+    paymentMethod: Literal["razorpay", "UPI", "Card", "NetBanking"] = "razorpay"
 
 
 class WalletTransactionResponse(BaseModel):
@@ -272,18 +275,21 @@ class WalletBalanceResponse(BaseModel):
 # 5. ORDER PLACEMENT & TRACKING SCHEMAS
 # =========================================================================
 class OrderItemInput(BaseModel):
-    id: str
-    name: str
-    qty: int = Field(..., gt=0, le=50)
-    price: float = Field(..., gt=0)
-    customizations: Optional[List[str]] = []
-    photo: Optional[str] = ""
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=100)
+    qty: int = Field(gt=0, le=50)
+    # Legacy display values are accepted for compatibility, never used for pricing.
+    name: Optional[str] = Field(default=None, max_length=100)
+    price: Optional[float] = Field(default=None, ge=0)
+    customizations: List[str] = Field(default_factory=list, max_length=10)
+    photo: Optional[str] = Field(default=None, max_length=2000)
 
 
 class CreateOrderRequest(BaseModel):
-    items: List[OrderItemInput] = Field(..., min_length=1)
-    paymentMethod: str = Field("wallet", description="'wallet', 'upi', 'card', or 'cash'")
-    specialInstructions: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+    items: List[OrderItemInput] = Field(min_length=1, max_length=50)
+    paymentMethod: Literal["wallet", "razorpay", "upi", "card"] = "wallet"
+    specialInstructions: Optional[str] = Field(default=None, max_length=255)
 
 
 class OrderResponse(BaseModel):
@@ -311,6 +317,9 @@ class OrderResponse(BaseModel):
     createdAt: Optional[str] = None
     readyAt: Optional[str] = None
     completedAt: Optional[str] = None
+
+    checkout: Optional[Dict[str, Any]] = None
+    refundStatus: Optional[str] = None
 
 
 class TimelineStep(BaseModel):

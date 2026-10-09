@@ -1,10 +1,11 @@
 import React, { useState, useRef } from 'react'
+import { adminOperationsApi } from '../lib/adminOperationsApi'
 
 export interface ExtractedMeal {
   day: string
   meal_type: 'breakfast' | 'lunch' | 'snacks' | 'dinner'
   items: string[]
-  confidence: number
+  confidence?: number
 }
 
 interface OcrMenuUploadProps {
@@ -12,60 +13,24 @@ interface OcrMenuUploadProps {
   onShowToast?: (title: string, description?: string, type?: 'success' | 'info' | 'warning' | 'error') => void
 }
 
-const SAMPLE_PRESETS = [
-  {
-    name: 'Official Hostel Mess Timetable.jpg',
-    size: '1.8 MB',
-    previewUrl:
-      'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=600&auto=format&fit=crop&q=80',
-    schedule: [
-      { day: 'Monday', meal_type: 'breakfast' as const, items: ['Idli', 'Medu Vada', 'Sambar', 'Coconut Chutney', 'Tea/Coffee'], confidence: 99 },
-      { day: 'Monday', meal_type: 'lunch' as const, items: ['Basmati Rice', 'Dal Tadka', 'Paneer Butter Masala', 'Chapati', 'Gulab Jamun'], confidence: 98 },
-      { day: 'Monday', meal_type: 'snacks' as const, items: ['Samosa with Mint Chutney', 'Ginger Tea'], confidence: 97 },
-      { day: 'Monday', meal_type: 'dinner' as const, items: ['Jeera Rice', 'Dal Makhani', 'Mixed Veg', 'Tandoori Roti', 'Ice Cream'], confidence: 99 },
-      { day: 'Tuesday', meal_type: 'breakfast' as const, items: ['Masala Poha', 'Boiled Eggs', 'Sprouts', 'Filter Coffee'], confidence: 98 },
-      { day: 'Tuesday', meal_type: 'lunch' as const, items: ['Veg Biryani', 'Mirchi Ka Salan', 'Boondi Raita', 'Phulka'], confidence: 99 },
-      { day: 'Tuesday', meal_type: 'snacks' as const, items: ['Pani Puri / Sev Puri', 'Masala Chai'], confidence: 96 },
-      { day: 'Tuesday', meal_type: 'dinner' as const, items: ['Ghee Rice', 'Chole Masala', 'Bhature', 'Kheer'], confidence: 98 },
-      { day: 'Wednesday', meal_type: 'breakfast' as const, items: ['Aloo Paratha', 'Curd & Pickle', 'Fresh Fruits', 'Tea'], confidence: 99 },
-      { day: 'Wednesday', meal_type: 'lunch' as const, items: ['Steamed Rice', 'Kadhai Paneer / Chicken Curry', 'Dal Fry', 'Roti'], confidence: 97 },
-      { day: 'Wednesday', meal_type: 'snacks' as const, items: ['Veg Cutlet', 'Tomato Sauce', 'Tea'], confidence: 98 },
-      { day: 'Wednesday', meal_type: 'dinner' as const, items: ['Fried Rice', 'Chilli Paneer', 'Hot & Sour Soup', 'Brownie'], confidence: 99 },
-      { day: 'Thursday', meal_type: 'breakfast' as const, items: ['Mysore Masala Dosa', 'Tomato Chutney', 'Coffee'], confidence: 99 },
-      { day: 'Thursday', meal_type: 'lunch' as const, items: ['Lemon Rice', 'Avial', 'Sambar', 'Curd Rice'], confidence: 98 },
-      { day: 'Thursday', meal_type: 'snacks' as const, items: ['Bhel Puri', 'Cold Coffee'], confidence: 97 },
-      { day: 'Thursday', meal_type: 'dinner' as const, items: ['Palak Paneer', 'Rajma Masala', 'Jeera Rice', 'Rasgulla'], confidence: 98 },
-      { day: 'Friday', meal_type: 'breakfast' as const, items: ['Upma', 'Boiled Egg / Banana', 'Coconut Chutney', 'Tea'], confidence: 98 },
-      { day: 'Friday', meal_type: 'lunch' as const, items: ['Hyderabadi Dum Biryani', 'Salad', 'Raita', 'Gulab Jamun'], confidence: 99 },
-      { day: 'Friday', meal_type: 'snacks' as const, items: ['Pav Bhaji', 'Masala Butter Milk'], confidence: 99 },
-      { day: 'Friday', meal_type: 'dinner' as const, items: ['Butter Chicken / Shahi Paneer', 'Dal Tadka', 'Naan', 'Pastry'], confidence: 98 },
-      { day: 'Saturday', meal_type: 'breakfast' as const, items: ['Puri Bhaji', 'Suji Halwa', 'Tea / Coffee'], confidence: 99 },
-      { day: 'Saturday', meal_type: 'lunch' as const, items: ['Rajma Chawal', 'Mixed Veg Raita', 'Chapati', 'Papad'], confidence: 98 },
-      { day: 'Saturday', meal_type: 'snacks' as const, items: ['Grilled Cheese Sandwich', 'Fresh Juice'], confidence: 97 },
-      { day: 'Saturday', meal_type: 'dinner' as const, items: ['Pasta Alfredo', 'Garlic Bread', 'Choco Lava Cake'], confidence: 98 },
-      { day: 'Sunday', meal_type: 'breakfast' as const, items: ['Chole Bhature', 'Lassi', 'Pickle', 'Sweet Jalebi'], confidence: 99 },
-      { day: 'Sunday', meal_type: 'lunch' as const, items: ['Special Sunday Thali (2 Curries, Dal, Rice, Roti, Sweet)'], confidence: 99 },
-      { day: 'Sunday', meal_type: 'snacks' as const, items: ['Kachori with Sweet Chutney', 'Chai'], confidence: 98 },
-      { day: 'Sunday', meal_type: 'dinner' as const, items: ['Special Biryani Feast', 'Raita', 'Double Ka Meetha'], confidence: 99 },
-    ],
-  },
-]
-
 export default function OcrMenuUpload({
   onScheduleSaved,
   onShowToast,
 }: OcrMenuUploadProps) {
-  const [selectedImage, setSelectedImage] = useState<string | null>(SAMPLE_PRESETS[0].previewUrl)
-  const [fileName, setFileName] = useState<string>(SAMPLE_PRESETS[0].name)
-  const [fileSize, setFileSize] = useState<string>(SAMPLE_PRESETS[0].size)
+  const [selectedImage, setSelectedImage] = useState<string | null>(null)
+  const [fileName, setFileName] = useState<string>('No file selected')
+  const [fileSize, setFileSize] = useState<string>('0 MB')
   const [isDragging, setIsDragging] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
-  const [scanProgress, setScanProgress] = useState(0)
   const [scanStage, setScanStage] = useState('')
   const [extractedData, setExtractedData] = useState<ExtractedMeal[] | null>(null)
   const [selectedDayTab, setSelectedDayTab] = useState<string>('Monday')
   const [isSaved, setIsSaved] = useState(false)
 
+  const [file, setFile] = useState<File | null>(null)
+  const [error, setError] = useState('')
+  const [isSaving, setIsSaving] = useState(false)
+  const requestLock = useRef(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleFileDrop = (e: React.DragEvent) => {
@@ -84,6 +49,12 @@ export default function OcrMenuUpload({
   }
 
   const processSelectedFile = (file: File) => {
+    if (requestLock.current) return
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
+      setError('Choose a PNG, JPEG, or WebP image up to 10 MB.'); return
+    }
+    setFile(file); setError('')
+
     setFileName(file.name)
     setFileSize(`${(file.size / (1024 * 1024)).toFixed(1)} MB`)
     const reader = new FileReader()
@@ -95,44 +66,23 @@ export default function OcrMenuUpload({
     reader.readAsDataURL(file)
   }
 
-  const runOcrProcessing = () => {
-    if (!selectedImage) {
-      onShowToast?.('Upload Required', 'Please drop or choose a menu image first.', 'warning')
-      return
-    }
-
-    setIsProcessing(true)
-    setScanProgress(10)
-    setScanStage('Analyzing document layout & perspective...')
-
-    setTimeout(() => {
-      setScanProgress(38)
-      setScanStage('Segmenting 7-day meal matrix & headers...')
-    }, 600)
-
-    setTimeout(() => {
-      setScanProgress(72)
-      setScanStage('Running Optical Character Recognition on food items...')
-    }, 1300)
-
-    setTimeout(() => {
-      setScanProgress(95)
-      setScanStage('Formatting JSON schema for Weekly Menu database...')
-    }, 1900)
-
-    setTimeout(() => {
-      setIsProcessing(false)
-      setScanProgress(100)
-      setExtractedData(SAMPLE_PRESETS[0].schedule)
-      onShowToast?.(
-        'OCR Complete!',
-        'Successfully recognized all 28 meal entries across 7 days.',
-        'success'
-      )
-    }, 2400)
+  const runOcrProcessing = async () => {
+    if (!file || requestLock.current) return
+    requestLock.current = true; setIsProcessing(true); setIsSaved(false); setError('')
+    setScanStage('Extracting menu text. This may take a moment…')
+    try {
+      const response = await adminOperationsApi.extractMenu(file)
+      if (!Array.isArray(response.schedule) || !response.schedule.length) throw new Error('No readable meal entries were found. Try a clearer photo.')
+      setExtractedData(response.schedule)
+      setSelectedDayTab(response.schedule[0].day)
+      onShowToast?.('OCR Complete', 'Review the extracted dishes before saving.', 'success')
+    } catch (cause) { setError((cause as Error).message); onShowToast?.('OCR failed', (cause as Error).message, 'error') }
+    finally { requestLock.current = false; setIsProcessing(false) }
   }
 
   const handleAddItem = (day: string, mealType: string) => {
+    if (requestLock.current) return
+    setIsSaved(false)
     const newItemName = prompt(`Enter new dish item for ${day} ${mealType}:`)
     if (!newItemName || !newItemName.trim()) return
 
@@ -149,6 +99,8 @@ export default function OcrMenuUpload({
   }
 
   const handleRemoveItem = (day: string, mealType: string, itemIdx: number) => {
+    if (requestLock.current) return
+    setIsSaved(false)
     if (extractedData) {
       const updated = extractedData.map((meal) => {
         if (meal.day === day && meal.meal_type === mealType) {
@@ -161,15 +113,15 @@ export default function OcrMenuUpload({
     }
   }
 
-  const handleSaveToDatabase = () => {
-    if (!extractedData) return
-    setIsSaved(true)
-    onScheduleSaved?.(extractedData)
-    onShowToast?.(
-      'Schedule Synchronized!',
-      'All 7 days of weekly mess menu have been upserted into PostgreSQL and Redis cache invalidated.',
-      'success'
-    )
+  const handleSaveToDatabase = async () => {
+    if (!extractedData || requestLock.current) return
+    requestLock.current = true; setIsSaving(true); setError('')
+    try {
+      await adminOperationsApi.saveWeeklyMenu(extractedData.map(({ day, meal_type, items }) => ({ day, meal_type, items })))
+      setIsSaved(true); onScheduleSaved?.(extractedData)
+      onShowToast?.('Schedule Saved', 'The reviewed weekly menu has been saved.', 'success')
+    } catch (cause) { setError((cause as Error).message); onShowToast?.('Save failed', (cause as Error).message, 'error') }
+    finally { requestLock.current = false; setIsSaving(false) }
   }
 
   const daysList = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
@@ -179,6 +131,7 @@ export default function OcrMenuUpload({
 
   return (
     <div className="space-y-8 max-w-6xl mx-auto">
+      {error && <p role="alert" className="rounded-2xl border border-red-200 bg-white p-4 text-sm text-red-700">{error}</p>}
       {/* Header Info */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -193,10 +146,10 @@ export default function OcrMenuUpload({
         <div className="flex items-center gap-2">
           <span className="px-3 py-1.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-semibold flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            PostgreSQL Auto-Sync
+            Review Before Save
           </span>
           <span className="px-3 py-1.5 rounded-full bg-orange-50 text-[#F25C2C] border border-orange-200 text-xs font-semibold">
-            Redis Cache Invalidation
+            Save Reviewed Menu
           </span>
         </div>
       </div>
@@ -213,7 +166,7 @@ export default function OcrMenuUpload({
               }}
               onDragLeave={() => setIsDragging(false)}
               onDrop={handleFileDrop}
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => { if (!requestLock.current) fileInputRef.current?.click() }}
               className={`relative p-8 rounded-2xl border-2 border-dashed transition-all duration-200 flex flex-col items-center justify-center text-center cursor-pointer min-h-[280px] ${
                 isDragging
                   ? 'border-[#F25C2C] bg-orange-50/50'
@@ -223,8 +176,9 @@ export default function OcrMenuUpload({
               <input
                 type="file"
                 ref={fileInputRef}
+                disabled={isProcessing || isSaving}
                 onChange={handleFileChange}
-                accept="image/png, image/jpeg, image/webp, application/pdf"
+                accept="image/png, image/jpeg, image/webp"
                 className="hidden"
               />
 
@@ -250,12 +204,12 @@ export default function OcrMenuUpload({
                 <span className="text-[#F25C2C] underline underline-offset-4">browse file</span>
               </p>
               <p className="text-xs text-stone-500 mt-1 max-w-sm">
-                Supports PNG, JPG, JPEG, and PDF documents up to 10MB (handwritten or printed cafeteria charts).
+                Supports PNG, JPG, JPEG, and WebP images up to 10MB (handwritten or printed cafeteria charts).
               </p>
 
               {/* Quick sample badge */}
               <div className="mt-4 flex items-center gap-2">
-                <span className="text-[11px] font-medium text-stone-500">Preset loaded:</span>
+                <span className="text-[11px] font-medium text-stone-500">Selected file:</span>
                 <span className="text-xs font-mono font-semibold px-2.5 py-1 rounded-full bg-white border border-[#E5DFD7] text-stone-700">
                   {fileName} ({fileSize})
                 </span>
@@ -322,7 +276,7 @@ export default function OcrMenuUpload({
             <div className="space-y-3">
               <button
                 onClick={runOcrProcessing}
-                disabled={isProcessing}
+                disabled={isProcessing || isSaving || !file}
                 className="w-full py-4 px-6 rounded-full bg-[#F25C2C] hover:bg-[#d84e20] text-white text-sm font-bold transition-all duration-200 shadow-lg shadow-[#F25C2C]/30 hover:shadow-xl hover:shadow-[#F25C2C]/40 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-3"
               >
                 {isProcessing ? (
@@ -346,7 +300,7 @@ export default function OcrMenuUpload({
                         d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                       ></path>
                     </svg>
-                    <span>Extracting Text ({scanProgress}%)...</span>
+                    <span>Extracting Text…</span>
                   </>
                 ) : (
                   <>
@@ -369,7 +323,7 @@ export default function OcrMenuUpload({
               </button>
 
               <p className="text-[11px] text-center text-stone-500 font-medium">
-                Uses High-Precision Neural OCR to extract day arrays & meal timings automatically.
+                Extract the printed timetable, review the dishes, then save the menu.
               </p>
             </div>
           </div>
@@ -387,7 +341,7 @@ export default function OcrMenuUpload({
               </div>
               <div>
                 <h4 className="text-lg font-bold text-[#1D1A16] tracking-tight">
-                  OCR Extraction Results (28 Meals Parsed)
+                  OCR Extraction Results ({extractedData.length} Meals Parsed)
                 </h4>
                 <p className="text-xs text-stone-500">
                   Review the detected schedule below. You can edit any dish name before saving to PostgreSQL.
@@ -397,19 +351,19 @@ export default function OcrMenuUpload({
 
             <div className="flex items-center gap-3">
               <span className="px-3.5 py-1.5 rounded-full bg-stone-100 text-stone-700 text-xs font-semibold border border-stone-200">
-                Confidence: <strong className="text-emerald-700 font-bold">98.8%</strong>
+                Review required before saving
               </span>
 
               <button
                 onClick={handleSaveToDatabase}
-                disabled={isSaved}
+                disabled={isSaved || isSaving || isProcessing}
                 className={`px-6 py-2.5 rounded-full text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer flex items-center gap-2 ${
                   isSaved
                     ? 'bg-emerald-600 text-white'
                     : 'bg-[#F25C2C] hover:bg-[#d84e20] text-white shadow-[#F25C2C]/25'
                 }`}
               >
-                <span>{isSaved ? '✓ Saved to Weekly Database' : 'Confirm & Save to Database'}</span>
+                <span>{isSaving ? 'Saving…' : isSaved ? '✓ Saved to Weekly Database' : 'Confirm & Save to Database'}</span>
               </button>
             </div>
           </div>
