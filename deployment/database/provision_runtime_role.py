@@ -53,6 +53,8 @@ def arguments(argv=None):
     parser.add_argument("--migration-owner", required=True, help="Existing database/schema owner role")
     parser.add_argument("--runtime-role", default="canteen_runtime")
     parser.add_argument("--schema", default="public")
+    parser.add_argument("--provider", choices=("postgres", "neon"), default="postgres",
+                        help="Neon requires a bound plain-text password over verified TLS; ordinary PostgreSQL uses client SCRAM")
     parser.add_argument("--apply", action="store_true", help="Prompt privately and create a new role after checks")
     args = parser.parse_args(argv)
     if not SERVICE.fullmatch(args.service):
@@ -67,6 +69,8 @@ def arguments(argv=None):
         parser.error("Choose a distinct application role, not a provider/system owner role.")
     if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?", args.expected_host):
         parser.error("Expected host must be a hostname, never a URL or credentials.")
+    if args.provider == "neon" and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]*\.neon\.tech", args.expected_host):
+        parser.error("Neon password mode accepts only an explicit *.neon.tech hostname.")
     return args
 
 
@@ -121,8 +125,12 @@ def password_prompt():
 
 
 def apply_role(cursor, connection, args, password):
-    # Encrypt on this workstation so raw password text is never sent as SQL.
-    verifier = extensions.encrypt_password(password, args.runtime_role, connection, algorithm="scram-sha-256")
+    # Neon explicitly rejects pre-hashed passwords. Its opt-in mode is restricted
+    # to an exact Neon hostname and verified TLS by the preceding target guard.
+    # Keep the password in the bound parameter only; never print SQL/parameters.
+    # Other PostgreSQL providers retain client-side SCRAM encoding.
+    verifier = (password if args.provider == "neon" else
+                extensions.encrypt_password(password, args.runtime_role, connection, algorithm="scram-sha-256"))
     role = sql.Identifier(args.runtime_role)
     schema = sql.Identifier(args.schema)
     owner = sql.Identifier(args.migration_owner)

@@ -15,9 +15,9 @@ sys.modules[spec.name] = roles
 spec.loader.exec_module(roles)
 
 
-def arguments(apply=False):
+def arguments(apply=False, provider="postgres"):
     values = ["--service", "canteen_staging_owner", "--expected-database", "canteen_staging",
-              "--expected-host", "database.neon.tech", "--migration-owner", "migration_owner"]
+              "--expected-host", "database.neon.tech", "--migration-owner", "migration_owner", "--provider", provider]
     return roles.arguments(values + (["--apply"] if apply else []))
 
 
@@ -161,3 +161,30 @@ def test_connection_cleanup_errors_do_not_leak_driver_details(monkeypatch, capsy
     connection.rollback = connection.close = unsafe_cleanup
     assert roles.run(arguments(True), lambda **kwargs: connection) == 1
     assert "private driver" not in capsys.readouterr().err
+
+
+def test_neon_uses_bound_password_without_scram_or_output(monkeypatch, capsys):
+    connection = Connection()
+    monkeypatch.setattr(roles, "inspect_target", lambda *args: target())
+    monkeypatch.setattr(roles.extensions, "encrypt_password", lambda *args, **kwargs: pytest.fail("Neon rejects pre-hashed passwords"))
+    password = "synthetic-neon-private-password-for-tests"
+    assert roles.run(arguments(True, "neon"), lambda **kwargs: connection, lambda: password) == 0
+    create = [(statement, params) for statement, params in connection.recorder.executions if "CREATE ROLE" in statement]
+    assert len(create) == 1 and create[0][1] == (password,)
+    assert password not in create[0][0]
+    output = capsys.readouterr()
+    assert password not in output.out + output.err
+    assert connection.commits == 1 and connection.rollbacks == 0
+
+
+def test_neon_password_mode_refuses_another_provider():
+    with pytest.raises(SystemExit):
+        roles.arguments(["--service", "staging_owner", "--expected-database", "canteen_staging",
+                         "--expected-host", "database.other-provider.test", "--migration-owner", "migration_owner",
+                         "--provider", "neon"])
+
+
+def test_neon_mode_still_requires_verified_tls():
+    with pytest.raises(roles.UnsafeTarget):
+        roles.validate_target(target(), arguments(provider="neon"),
+                              {"host": "database.neon.tech", "sslmode": "require"}, True)
