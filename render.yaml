@@ -39,11 +39,11 @@ services:
       - key: TRUSTED_HOSTS
         sync: false
       - key: CORS_ORIGINS
-        value: '["https://localhost"]'
+        value: '["https://canteenos-student-krishna.pages.dev","https://canteenos-admin-krishna.pages.dev","https://localhost"]'
       - key: STUDENT_CORS_ORIGINS
-        value: '[]'
+        value: '["https://canteenos-student-krishna.pages.dev"]'
       - key: ADMIN_CORS_ORIGINS
-        value: '[]'
+        value: '["https://canteenos-admin-krishna.pages.dev"]'
       - key: SESSION_COOKIE_MODE_ENABLED
         value: "false"
       - key: RATE_LIMIT_ENABLED
@@ -56,6 +56,6 @@ services:
         value: disabled
       - key: PASSCODE_RECOVERY_ENABLED
         value: "false"
-    # Add actual separate Pages origins to CORS and role arrays before web launch.
-    # Update CORS through the dashboard; update this Blueprint before later syncs.
+    # Exact existing Direct Upload Pages origins verified on 10 October 2026.
+    # Keep these values aligned with managed settings before later Blueprint syncs.
     # Neon PostgreSQL and Upstash Redis are created separately on their FREE plans.

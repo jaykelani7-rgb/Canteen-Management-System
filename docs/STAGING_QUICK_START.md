@@ -1,6 +1,6 @@
 # ₹0 staging: setup and deployment checklist
 
-Updated 9 October 2026. **The Free staging backend is deployed and verified:**
+Updated 10 October 2026. **The Free staging backend is deployed and verified:**
 https://canteen-staging-api.onrender.com. `/api/health` returns HTTP 200 with
 `{"status":"alive"}`; `/api/ready` returns HTTP 200 with PostgreSQL and Redis ready.
 
@@ -9,11 +9,23 @@ Its bundled assets, application ID, matching update signature and all 13 Android
 checks passed. Output: `android/app/build/outputs/apk/debug/app-debug.apk`.
 The owner must install this new APK; physical-phone verification remains pending.
 
-Student and Admin Pages deployment remains blocked on GitHub repository access:
-the connected `krishnaisrani07` installation does not list the repository owned
-by `jaykelani7-rgb`. From Pages **Add account**, the repository owner must authorize
-Cloudflare for **Only select repositories → Canteen-Management-System**. Existing
-Direct Upload projects remain untouched; no public frontend is verified yet.
+Both existing Cloudflare **Direct Upload** projects are deployed and verified:
+
+- Student: https://canteenos-student-krishna.pages.dev
+- Admin: https://canteenos-admin-krishna.pages.dev
+- Shared API: https://canteen-staging-api.onrender.com
+
+GitHub App authorization is not required for Pages. No Pages projects were deleted
+or recreated. Both separately built ZIPs were uploaded to their matching existing
+projects. Public assets match the reviewed build outputs; exact web/native CORS
+passed after a fresh Render deploy. Save-only environment changes require a new
+deploy; restarting the previous deployment does not activate those saved values.
+
+Live browser acceptance passed: Student and Admin login, shared menu, Student
+cart/wallet order creation, Admin Live Orders and Preparing → Ready → Completed
+updates reflected in Student tracking. Only synthetic staging credit was used;
+external gateway payments remain disabled. Read-only database verification confirmed
+each order has one debit and the wallet matches the transaction ledger.
 
 Account/resource order: **Neon → Upstash → Render → Cloudflare Pages**.
 Use Free plans for the 40–50-person pilot. Free sleep/quotas are testing limitations;
@@ -50,8 +62,9 @@ Current verified execution results:
   and the persisted single-debit ledger. Only unique synthetic staging fixtures
   and an explicitly labelled synthetic test credit were created; no external money
   was processed. Gateway payments and automatic demo seeding remain disabled.
-- Twelve live native-origin/security checks passed. Frontend browser acceptance
-  remains pending actual Pages deployment; source builds are not evidence of it.
+- Exact Student, Admin and native-origin CORS checks passed; unrelated origins
+  are rejected. Both deployed websites passed browser acceptance, and independent
+  QA verified all 16 published files against the reviewed ZIP contents.
 
 No credentials, local configuration, database dumps or generated APKs were
 published. All commits were pushed only to `krishna`; `main` remains unchanged.
@@ -61,10 +74,9 @@ Neon Free `canteen-staging` (PostgreSQL 16/Singapore, database
 created with explicit owner approval. Their actual connections and backend
 health/readiness have now passed; existing local data was not transferred.
 
-The two existing empty Cloudflare projects, `canteenos-student-krishna` and
-`canteenos-admin-krishna`, are **Direct Upload**, with no Git connection. Preserve
-them. Cloudflare cannot convert a Direct Upload project to Git integration;
-create separate Git-integrated projects using the settings in section 4.
+The existing `canteenos-student-krishna` and `canteenos-admin-krishna` projects
+remain **Direct Upload**, with no Git connection. Reuse them for subsequent
+reviewed deployments; do not create replacement Git projects for this staging run.
 
 The owner has explicitly approved publication of reviewed deployment changes
 only to `krishna`, and private staging credentials only in local migration tools
@@ -163,11 +175,9 @@ do not disable rate limiting to avoid this resource. See
 
 ## 3. Render — owner dashboard actions
 
-First finish the approved source-publication prerequisite and safe database
-preparation. Open [Render Dashboard](https://dashboard.render.com) → New → Web
-Service → connect the existing GitHub repository. Authorize only the needed repo.
-The manual settings below correspond to the prepared Blueprint; do not create
-both a manual service and a duplicate Blueprint service.
+Reuse the existing Free `canteen-staging-api` service. It already builds the public
+repository and branch `krishna` without needing another GitHub App installation.
+The settings below describe that existing service; do not create a duplicate.
 
 | Field | Exact setting |
 | --- | --- |
@@ -210,8 +220,8 @@ Enter every nonsecret setting from the template:
 | `PAYMENT_PROVIDER` | `disabled` |
 | `PASSCODE_RECOVERY_ENABLED` | `false` — current SMTP transport is blocked on Render Free |
 | `TRUSTED_HOSTS` | JSON array of the **assigned actual API hostname** and `127.0.0.1` |
-| `CORS_ORIGINS` | Initially `["https://localhost"]` for bundled Android |
-| `STUDENT_CORS_ORIGINS` / `ADMIN_CORS_ORIGINS` | Initially `[]` / `[]`; fill actual separate Pages origins before web use |
+| `CORS_ORIGINS` | `["https://canteenos-student-krishna.pages.dev","https://canteenos-admin-krishna.pages.dev","https://localhost"]` |
+| `STUDENT_CORS_ORIGINS` / `ADMIN_CORS_ORIGINS` | `["https://canteenos-student-krishna.pages.dev"]` / `["https://canteenos-admin-krishna.pages.dev"]` |
 
 `https://localhost` above is Capacitor's bundled app **origin**, never the backend
 URL. Do not enable Admin cookie authentication for it. No wildcard origins/hosts.
@@ -241,70 +251,42 @@ database readiness or use a keep-awake workaround. Render Free sleeps after idle
 traffic and can take about a minute to wake; this is a stated pilot limitation.
 See [Render Free limitations](https://render.com/docs/free).
 
-## 4. Cloudflare Pages — owner account/project actions, then local builds
+## 4. Cloudflare Pages — existing Direct Upload projects
 
-Remain on Free at [Cloudflare Dashboard](https://dash.cloudflare.com).
-Preserve the two existing empty Direct Upload projects. For automatic deployment
-from the approved repository, create **new Git-integrated Pages projects**:
+Remain on Free. Use the existing projects in
+[Workers & Pages](https://dash.cloudflare.com/e49f8c1863efc23f6e8088769f10bc3b/workers-and-pages).
+Do not connect GitHub, create duplicate projects or upload the repository itself.
 
-| Field | Student | Admin |
+| Existing project | Exact local upload folder | Verified public origin |
 | --- | --- | --- |
-| Suggested project name | `canteenos-student-krishna-git` | `canteenos-admin-krishna-git` |
-| Repository | `jaykelani7-rgb/Canteen-Management-System` | Same repository |
-| Production branch | `krishna` | `krishna` |
-| Framework preset | None | None |
-| Root directory | Blank | Blank |
-| Build command | `pnpm run build:pages` | `pnpm run build:pages` |
-| Build output directory | `dist/student` | `dist/admin` |
-| `NODE_VERSION` | `22.22.0` | `22.22.0` |
-| `PNPM_VERSION` | `10.34.3` | `10.34.3` |
+| `canteenos-student-krishna` | `dist/student` | https://canteenos-student-krishna.pages.dev |
+| `canteenos-admin-krishna` | `dist/admin` | https://canteenos-admin-krishna.pages.dev |
 
-Workers & Pages → Create application → Pages → Connect to Git. Authorize only
-the named repository. Copy each **actually assigned** `pages.dev` HTTPS origin
-from the dashboard; never guess it or treat project creation as deployment.
-Both projects require the three public build variables `VITE_API_BASE_URL`,
-`VITE_STUDENT_APP_URL`, and `VITE_ADMIN_APP_URL`, using the real verified API and
-assigned project origins. No database, Redis, JWT or provider secret belongs here.
-
-The build helper checks actual backend health/readiness, builds both web apps
-with Bearer authentication, and each project publishes only its own output.
-An initial build before URLs/configuration are complete must remain unaccepted;
-finish the actual configuration and redeploy. Direct Upload projects cannot
-convert to Git integration. See [official Direct Upload documentation](https://developers.cloudflare.com/pages/get-started/direct-upload/).
-
-After the backend passes public acceptance, set the three **public** process-only
-origins from the real dashboards, with no paths or trailing `/api`:
+From the repository root, build with these public process variables:
 
 ```powershell
-Set-Location 'C:\Users\isran\Desktop\Canteen-Management-System'
-$env:VITE_API_BASE_URL = (Read-Host 'Actual verified HTTPS API origin').Trim()
-$env:VITE_STUDENT_APP_URL = (Read-Host 'Actual Student Pages HTTPS origin').Trim()
-$env:VITE_ADMIN_APP_URL = (Read-Host 'Actual Admin Pages HTTPS origin').Trim()
-pnpm run test:pages
-if ($LASTEXITCODE -ne 0) { throw 'Pages configuration tests failed.' }
+$env:VITE_API_BASE_URL = 'https://canteen-staging-api.onrender.com'
+$env:VITE_STUDENT_APP_URL = 'https://canteenos-student-krishna.pages.dev'
+$env:VITE_ADMIN_APP_URL = 'https://canteenos-admin-krishna.pages.dev'
 pnpm run build:pages
-if ($LASTEXITCODE -ne 0) { throw 'Backend health/readiness or Pages build failed.' }
+if ($LASTEXITCODE -ne 0) { throw 'Backend acceptance or Pages build failed.' }
 ```
 
-The builder rejects unsafe origins, forces `VITE_AUTH_COOKIE_MODE=false`/web mode,
-checks exact external API JSON, then builds **Student → `dist/student`** and
-**Admin → `dist/admin`** with the same API base. Dashboard environment changes do
-not alter already-built Direct Upload JavaScript; rebuild when a public URL changes.
+The existing helper verifies actual health/readiness, rejects unsafe origins and
+builds each app separately with Bearer authentication. For any future upload,
+select the matching existing project → **Create deployment** → upload only that
+project's output folder (or a ZIP whose `index.html` is at its root) → **Deploy site**.
+Never upload the parent `dist`, `pages-deployment.json`, local configuration,
+credentials, database files, Android artifacts or the other app's folder.
+Dashboard environment changes do not rewrite already-built JavaScript: rebuild
+and upload when the public API or app origins change.
 
-Use the public `dist/pages-deployment.json` to update Render's exact global/role
-CORS arrays and trusted hosts, preserving the native origin. Keep cookie mode off.
-Do not upload this metadata, a `.env`, repository source or the parent `dist` folder.
-If later synchronizing the Blueprint, first reflect the real CORS values there so
-it does not restore the native-only bootstrap defaults.
-
-In each new Git-integrated project, enter the public build variables above,
-then deploy the approved `krishna` revision. Verify that Student publishes only
-`dist/student` and Admin only `dist/admin`. Environment changes require rebuilds.
-
-Verify both actual HTTPS sites, Student PWA isolation, login/menu and authorized
-order/history/tracking, plus Admin status reflection against the same staging DB.
-Use disabled payments or an approved verified provider sandbox, never fake capture
-or live merchant credentials. Do not reset balances/data to make tests pass.
+Use `dist/pages-deployment.json` only to align the exact managed backend CORS
+settings. Preserve native `https://localhost` and cookie-disabled mode. Activate
+saved Render environment changes with **Save and deploy** or a fresh manual deploy;
+**Save only → Restart service** keeps the previous deployed environment snapshot.
+Verify public HTTPS health/readiness, both sites, login/menu/order/tracking and
+shared Admin updates after every deployment. No continuous keep-awake workaround.
 
 ## 5. Android cutover — only after verified backend health/readiness
 
@@ -319,7 +301,8 @@ Physical-phone login/menu/order/tracking and graceful failures still need actual
 testing after cutover. Future production requires separate resources, credentials,
 origins, backups and capacity checks; do not point testing at live college tables.
 
-**Next action:** preserve and restore the existing records into the approved
-empty Neon staging database, provision the restricted runtime role, deploy Render,
-and accept only real external health/readiness before frontend or APK release.
+**Remaining owner action:** transfer and install the rebuilt debug APK over the
+existing phone app, then verify login/menu/order/tracking on the physical phone.
+The backend and both web deployments have passed live checks. No provider account
+setup, GitHub authorization or data transfer is required for this staging run.
 No private credentials are needed in chat.

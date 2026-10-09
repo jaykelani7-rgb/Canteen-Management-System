@@ -1,10 +1,20 @@
 # Android connection after backend deployment
 
-The owner confirmed the current debug APK is installed and its Student UI renders correctly on a phone. It still uses the documented staging placeholder; backend login, menu, checkout and tracking on that phone have not been verified. The current APK has deliberately not been rebuilt or overwritten while the real backend URL is missing.
+The owner installed the earlier placeholder APK and confirmed its UI renders.
+On 9 October 2026, after real health/readiness passed, the Student debug APK was
+rebuilt with **https://canteen-staging-api.onrender.com**. On 10 October its payload, all
+13 Android checks and unchanged signing certificate were independently verified.
+It contains the bundled Student frontend, no temporary tunnel, placeholder or
+remote `server.url`. The owner still needs to install this update; physical-phone
+login/menu/order/tracking against the deployed backend has not been verified.
+
+APK SHA-256: `5ef1d508b2f7f4918a377cb6cef125c47e29ef0e660cee8a0538d4decdddebf9`.
+Web deployments use the same API and database; no further APK rebuild is needed
+unless its configured API origin or Student application code changes.
 
 ## Required public configuration
 
-Obtain the actual HTTPS **API base origin** from the deployed provider service. For the free staging route, Render displays the service's real `onrender.com` HTTPS address after deployment. No particular service name/address is claimed here. A later production API should use its approved stable hostname. Provide only this public URL; configure database/JWT/Redis/provider secrets privately in server-managed variables, never in chat, `VITE_*`, Android assets or Capacitor configuration.
+Obtain the actual HTTPS **API base origin** from the deployed provider service. For the free staging route, Render displays the service's real `onrender.com` HTTPS address after deployment. The verified staging origin is `https://canteen-staging-api.onrender.com`. A later production API should use its approved stable hostname. Provide only this public URL; configure database/JWT/Redis/provider secrets privately in server-managed variables, never in chat, `VITE_*`, Android assets or Capacitor configuration.
 
 The base must not end in `/api`: the existing API client adds `/api/...`. The production builder rejects absent URLs, documentation domains, private/local/reserved IP addresses and hostnames, credentials, query strings, fragments and known temporary tunnel addresses. A syntactically accepted hostname is not proof of public DNS, TLS or backend health; verify those independently first. Staging still permits the explicitly labeled documentation placeholder so packaging can be prepared without inventing a deployment.
 
