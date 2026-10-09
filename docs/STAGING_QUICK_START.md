@@ -1,8 +1,19 @@
 # ₹0 staging: setup and deployment checklist
 
-Updated 9 October 2026. **No backend HTTPS URL has been deployed or verified.**
-The installed Android APK still contains its staging-backend placeholder and must
-remain unchanged until the real backend passes the checks below.
+Updated 9 October 2026. **The Free staging backend is deployed and verified:**
+https://canteen-staging-api.onrender.com. `/api/health` returns HTTP 200 with
+`{"status":"alive"}`; `/api/ready` returns HTTP 200 with PostgreSQL and Redis ready.
+
+The Student debug APK has now been rebuilt with that actual HTTPS API origin.
+Its bundled assets, application ID, matching update signature and all 13 Android
+checks passed. Output: `android/app/build/outputs/apk/debug/app-debug.apk`.
+The owner must install this new APK; physical-phone verification remains pending.
+
+Student and Admin Pages deployment remains blocked on GitHub repository access:
+the connected `krishnaisrani07` installation does not list the repository owned
+by `jaykelani7-rgb`. From Pages **Add account**, the repository owner must authorize
+Cloudflare for **Only select repositories → Canteen-Management-System**. Existing
+Direct Upload projects remain untouched; no public frontend is verified yet.
 
 Account/resource order: **Neon → Upstash → Render → Cloudflare Pages**.
 Use Free plans for the 40–50-person pilot. Free sleep/quotas are testing limitations;
@@ -25,15 +36,30 @@ without explicit approval. Use the providers' included HTTPS domains.
   HTTPS origins, verifies API health/readiness, builds both existing web apps and
   emits public CORS metadata outside their upload directories.
 
-These files/configuration are local preparation, not cloud deployment evidence.
-Existing source, database rows, credentials and the installed APK are preserved.
-Neon, Render, Cloudflare and Upstash sign-in have been confirmed in this session;
-account login alone does not provision or verify a service.
+Current verified execution results:
+
+- Neon staging was originally empty and safely migrated to `0005_secure_recovery`.
+  The owner authorized using this isolated target instead of transferring local
+  test data. The original local database remains unchanged.
+- A new restricted runtime role was created with verified TLS, no DDL/elevated
+  membership and read-only migration metadata. Upstash verified TLS PING passed.
+- Render is Free, using reviewed `krishna` source and managed environment secrets.
+  Its startup, public health and PostgreSQL/Redis readiness checks passed.
+- Actual public API acceptance passed: admin/student login, shared menu, wallet
+  order creation/idempotency, admin order visibility/status transitions, tracking
+  and the persisted single-debit ledger. Only unique synthetic staging fixtures
+  and an explicitly labelled synthetic test credit were created; no external money
+  was processed. Gateway payments and automatic demo seeding remain disabled.
+- Twelve live native-origin/security checks passed. Frontend browser acceptance
+  remains pending actual Pages deployment; source builds are not evidence of it.
+
+No credentials, local configuration, database dumps or generated APKs were
+published. All commits were pushed only to `krishna`; `main` remains unchanged.
 
 Neon Free `canteen-staging` (PostgreSQL 16/Singapore, database
 `canteen_staging`) and Upstash Free `canteen-staging` (Singapore/TLS) were
-created with explicit owner approval. Their creation does not establish that
-data has been restored or backend health/readiness has passed.
+created with explicit owner approval. Their actual connections and backend
+health/readiness have now passed; existing local data was not transferred.
 
 The two existing empty Cloudflare projects, `canteenos-student-krishna` and
 `canteenos-admin-krishna`, are **Direct Upload**, with no Git connection. Preserve
@@ -111,6 +137,9 @@ After the selected staging target is safely at head, use
 a private named libpq service (`sslmode=verify-full`, CA/password files outside the
 repository). Supply its actual `--service`, `--expected-database`, `--expected-host`,
 `--migration-owner` and distinct `--runtime-role`; defaults are read-only.
+For Neon, also supply `--provider neon`: Neon requires a bound password over
+verified TLS and rejects pre-hashed PostgreSQL role passwords. This mode accepts
+only an explicit Neon hostname and never prints SQL parameters or credentials.
 Only an approved invocation with `--apply` creates a **new** role after hidden
 password prompts and ownership/schema checks. It refuses existing roles, changes
 no application rows and grants only application DML/sequences plus read access to
