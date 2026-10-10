@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     STAGING_QA_STUDENT_ID: str = ""
     STAGING_QA_STUDENT_ROLL: str = ""
     GEMINI_API_KEY: str = ""
-    OCR_MODEL: str = "gemini-2.5-flash"
+    OCR_MODEL: str = "gemini-3.5-flash-lite"
     OCR_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=60)
 
     @model_validator(mode="after")

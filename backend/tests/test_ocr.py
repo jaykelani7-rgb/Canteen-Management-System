@@ -139,6 +139,7 @@ async def test_ocr_sdk_network_timeout_is_actionable_and_does_not_leak(monkeypat
     ({"error":{"code":400,"message":"API key not valid. Pass a valid API key secret-source-token"}},"invalid_api_key","invalid or expired"),
     ({"error":{"code":400,"message":"This model is not available for new projects secret-source-token"}},"model_unavailable","free-tier model"),
     ({"error":{"code":404,"message":"models/old-model is not found for API version v1beta secret-source-token"}},"model_unavailable","free-tier model"),
+    ({"error":{"code":404,"status":"NOT_FOUND","message":"This model models/old-model is no longer available to new users. Please update your code to use models/new-model for the latest features and improvements."}},"model_unavailable","free-tier model"),
     ({"error":{"code":400,"message":"Unsupported request field secret-source-token","details":[{"reason":"secret-source-token"}]}},"request_invalid","OCR_MODEL"),
 ])
 async def test_ocr_precise_provider_reason_never_logs_raw_details(monkeypatch,caplog,payload,reason,hint):
@@ -247,7 +248,7 @@ async def test_real_sdk_wire_schema_omits_rejected_field_and_preserves_image(mon
         assert part.get('mimeType', part.get('mime_type')) == 'image/png'
         with Image.open(io.BytesIO(base64.urlsafe_b64decode(part['data']))) as actual:
             assert actual.format == 'PNG' and actual.size == (8, 8)
-        assert str(request.url) == 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+        assert str(request.url) == 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent'
         observed.append(True)
         return httpx.Response(200, json={'candidates': [{'content': {'role': 'model', 'parts': [
             {'text': '{"schedule":[{"day":"Monday","meal_type":"lunch","items":["Dal","Rice"]}]}'}]}}]})
@@ -257,7 +258,7 @@ async def test_real_sdk_wire_schema_omits_rejected_field_and_preserves_image(mon
         kwargs['http_options'] = kwargs['http_options'].model_copy(update={'httpx_async_client': http})
         return original_client(**kwargs)
     monkeypatch.setattr(ocr_router.genai, 'Client', client)
-    monkeypatch.setattr(ocr_router, 'settings', SimpleNamespace(GEMINI_API_KEY='offline-test-key', OCR_MODEL='gemini-2.5-flash', OCR_TIMEOUT_SECONDS=30))
+    monkeypatch.setattr(ocr_router, 'settings', SimpleNamespace(GEMINI_API_KEY='offline-test-key', OCR_TIMEOUT_SECONDS=30))
     result = await ocr_router.extract_menu(png(), 'image/png')
     assert observed == [True] and result.schedule[0].items == ['Dal', 'Rice']
     await http.aclose()  # The SDK leaves caller-owned HTTP clients to their owner.
