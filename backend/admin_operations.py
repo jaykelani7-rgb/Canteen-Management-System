@@ -174,3 +174,13 @@ async def operations_status(db:AsyncSession=Depends(get_db),admin:AdminUser=Depe
     try: redis_available=bool(await asyncio.wait_for(get_redis_client().ping(),timeout=2))
     except Exception: redis_available=False
     return {"serviceOnline":True,"pendingOrders":active,"countQueued":queued,"activeWindow":window,"redisAvailable":redis_available}
+@admin_operations_router.post("/qa-wallet-credit")
+async def credit_qa_wallet_test(db: AsyncSession = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
+    from staging_wallet import credit_staging_qa_wallet
+    from sqlalchemy import select
+    from models import StudentUser
+    student = (await db.execute(select(StudentUser).where(StudentUser.name == "STAGING QA Student"))).scalars().first()
+    if not student:
+        from fastapi import HTTPException
+        raise HTTPException(404, "STAGING QA Student not found")
+    return await credit_staging_qa_wallet(db, student.id, student.roll_number)
