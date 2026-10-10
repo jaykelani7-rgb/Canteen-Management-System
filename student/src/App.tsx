@@ -10,6 +10,7 @@ import { apiClient, STUDENT_SESSION_EXPIRED } from '../../src/lib/apiClient'
 import type { UserProfile, AuthResponse, RegisterInput, StudentMenuItem, StudentOrder, StudentOrderStatus, StudentNotification, OrderTracking, WalletTransaction, WalletTopup } from '../../src/lib/studentTypes'
 import { checkoutIntent, clearCheckoutIntent, completeGatewayPayment, completeWalletTopup, walletTopupIntent, clearWalletTopupIntent, CheckoutDismissed } from '../../src/lib/paymentCheckout'
 import './student.css'
+import FoodImage from '../../src/components/FoodImage'
 
 /* ============================================================================
    Smart Canteen OS — Student Mobile App
@@ -54,6 +55,10 @@ type Store = {
   notifications: StudentNotification[]
   loading: boolean
   error: string | null
+  menuLoading: boolean
+  menuError: string | null
+  menuCategory: Category
+  setMenuCategory: (category: Category) => void
   refresh: () => Promise<void>
   selectOrder: (order: StudentOrder) => void
   submitOrder: (paymentMethod: string) => Promise<StudentOrder>
@@ -952,7 +957,7 @@ function CategoryTabs({
   )
 }
 
-function SearchBar({ placeholder = 'Search burgers, wraps, chai…' }) {
+function SearchBar({ placeholder = 'Search the menu…' }) {
   const { go } = useStore()
   return (
     <div className="mx-5 flex items-center gap-3 rounded-2xl bg-card px-4 py-3 shadow-sm">
@@ -980,7 +985,7 @@ function FoodCardWide({ item }: { item: MenuItem }) {
         }}
         className="relative h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-paper"
       >
-        <img
+        <FoodImage
           src={item.photo}
           alt={item.name}
           className={`h-full w-full object-cover ${item.available ? '' : 'grayscale'}`}
@@ -1048,7 +1053,7 @@ function FoodCardWide({ item }: { item: MenuItem }) {
 }
 
 function HomeScreen() {
-  const { go, select, user, menu: MENU, orders, selectOrder, notifications, loading, error, refresh } = useStore()
+  const { go, user, menu: MENU, orders, selectOrder, notifications, menuLoading, menuError, refresh, setMenuCategory } = useStore()
   const firstName = user?.name ? user.name.split(' ')[0] : 'Student'
   const liveOrder = orders.find(o => !['Completed', 'Picked Up', 'Cancelled'].includes(o.status))
   const popular = [...MENU.filter(m => m.tag), ...MENU.filter(m => !m.tag)].slice(0, 4)
@@ -1078,8 +1083,8 @@ function HomeScreen() {
         <SearchBar />
       </div>
 
-      {loading && <p className="px-5 pt-4 text-sm text-ink-soft">Loading your canteen…</p>}
-      {error && <div className="mx-5 mt-4 rounded-2xl bg-berry-soft p-4 text-sm text-berry">{error}<button className="ml-3 font-bold" onClick={() => { void refresh() }}>Retry</button></div>}
+      {menuLoading && <p role="status" className="px-5 pt-4 text-sm text-ink-soft">Loading your canteen…</p>}
+      {menuError && <div role="alert" className="mx-5 mt-4 rounded-2xl bg-berry-soft p-4 text-sm text-berry">{menuError}<button className="ml-3 font-bold" onClick={() => { void refresh() }}>Retry</button></div>}
       {liveOrder && <button onClick={() => { selectOrder(liveOrder); go(liveOrder.status === 'Ready' ? 'ready' : 'tracking') }} className="mx-5 mt-4 flex w-[calc(100%-2.5rem)] items-center gap-3 rounded-3xl bg-ink p-4 text-left text-white">
         <div className="grid h-12 w-12 place-items-center rounded-2xl bg-tangerine text-xl">🍔</div>
         <div className="flex-1"><p className="font-mono text-sm font-bold">{liveOrder.number}</p><p className="mt-1 text-xs text-white/70">Queue position {liveOrder.queuePosition} · Track →</p></div>
@@ -1091,12 +1096,12 @@ function HomeScreen() {
         {[
           { e: '🍟', l: 'Snacks' },
           { e: '🍜', l: 'Meals' },
-          { e: '🥤', l: 'Drinks' },
-          { e: '🔥', l: 'Trending' },
+          { e: '🥤', l: 'Beverages' },
+          { e: '🔥', l: 'Quick Bites' },
         ].map((c) => (
           <button
             key={c.l}
-            onClick={() => go('menu')}
+            onClick={() => { setMenuCategory(c.l as Category); go('menu') }}
             className="flex flex-col items-center gap-1.5 rounded-2xl bg-card py-3 shadow-sm"
           >
             <span className="text-2xl">{c.e}</span>
@@ -1143,13 +1148,12 @@ function HomeScreen() {
 }
 
 function MenuScreen() {
-  const { menu: MENU, loading, error, refresh } = useStore()
-  const [cat, setCat] = useState<Category>('All')
+  const { menu: MENU, menuLoading, menuError, refresh, menuCategory: cat, setMenuCategory: setCat } = useStore()
   const [query, setQuery] = useState('')
   const list = MENU.filter(
     (m) =>
       (cat === 'All' || m.category === cat) &&
-      (query === '' || m.name.toLowerCase().includes(query.toLowerCase()))
+      (query.trim() === '' || `${m.name} ${m.desc}`.toLowerCase().includes(query.trim().toLowerCase()))
   )
   return (
     <Screen>
@@ -1157,7 +1161,7 @@ function MenuScreen() {
       <div className="mx-5 flex items-center gap-3 rounded-2xl bg-card px-4 py-3 shadow-sm">
         <Icon name="search" className="h-5 w-5 text-ink-soft" />
         <input
-          placeholder="Search burgers, wraps, chai…"
+          placeholder="Search the menu…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="w-full bg-transparent text-sm outline-none placeholder:text-ink-soft"
@@ -1170,15 +1174,15 @@ function MenuScreen() {
         <CategoryTabs value={cat} onChange={setCat} />
       </div>
       <div className="mt-4 flex flex-col gap-3 px-5">
-        {loading && <p className="text-sm text-ink-soft">Loading fresh menu…</p>}
-        {error && <p className="text-sm text-berry">{error} <button onClick={() => { void refresh() }}>Retry</button></p>}
-        {!loading && !error && list.length === 0 ? (
+        {menuLoading && <p role="status" className="text-sm text-ink-soft">Loading fresh menu…</p>}
+        {menuError && <p role="alert" className="text-sm text-berry">{menuError} <button onClick={() => { void refresh() }}>Retry</button></p>}
+        {!menuLoading && !menuError && list.length === 0 ? (
           <EmptyState
             emoji="🔍"
-            title="No items found"
-            body={`Nothing matches "${query}". Try a different search.`}
-            cta="Clear search"
-            onCta={() => setQuery('')}
+            title={query.trim() ? 'No items found' : cat === 'All' ? 'Menu is being updated' : 'No items in this category'}
+            body={query.trim() ? `Nothing matches "${query.trim()}". Try a different search.` : cat === 'All' ? 'Please refresh or check again shortly.' : `No ${cat.toLowerCase()} are available right now.`}
+            cta={query.trim() ? 'Clear search' : cat === 'All' ? 'Refresh menu' : 'Show all items'}
+            onCta={() => { setQuery(''); if (cat === 'All') { void refresh() } else setCat('All') }}
           />
         ) : (
           list.map((m) => <FoodCardWide key={m.id} item={m} />)
@@ -1198,7 +1202,7 @@ function DetailsScreen() {
     <Screen nav={false}>
       <div className="relative">
         <div className="relative h-64 w-full overflow-hidden bg-paper">
-          <img
+          <FoodImage
             src={item.photo}
             alt={item.name}
             className={`h-full w-full object-cover ${item.available ? '' : 'grayscale'}`}
@@ -1297,7 +1301,7 @@ function CartItemRow({ line }: { line: CartLine }) {
   return (
     <div className="flex items-center gap-3 rounded-3xl bg-card p-3 shadow-sm">
       <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-paper">
-        <img
+        <FoodImage
           src={line.item.photo}
           alt={line.item.name}
           className="h-full w-full object-cover"
@@ -1783,17 +1787,11 @@ function OrderDetailsScreen() {
           <h3 className="font-display text-sm font-bold">Items</h3>
           <div className="mt-3 flex flex-col gap-3">
             {o.items.map((it) => {
-              const m = MENU.find((x) => x.name === it.name)
+              const m = MENU.find((x) => x.id === it.id)
               return (
                 <div key={it.name} className="flex items-center gap-3">
                   <div className="h-12 w-12 overflow-hidden rounded-xl bg-paper">
-                    {m && (
-                      <img
-                        src={m.photo}
-                        alt={it.name}
-                        className="h-full w-full object-cover"
-                      />
-                    )}
+                    <FoodImage src={it.photo || m?.photo} alt={it.name} className="h-full w-full object-cover" />
                   </div>
                   <div className="flex-1">
                     <p className="text-sm font-bold">{it.name}</p>
@@ -2088,18 +2086,22 @@ export default function App() {
   const [notifications, setNotifications] = useState<StudentNotification[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [menuLoading, setMenuLoading] = useState(false)
+  const [menuError, setMenuError] = useState<string | null>(null)
+  const [menuCategory, setMenuCategory] = useState<Category>('All')
   const [cart, setCart] = useState<CartLine[]>([])
   const [selected, setSelected] = useState<MenuItem | null>(null)
   const [banner, setBanner] = useState<SystemBanner | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const sessionVersion = useRef(0)
-  const refreshInFlight = useRef(false)
+  const refreshInFlight = useRef<symbol | null>(null)
+  const menuLoaded = useRef(false)
   const orderSubmitLock = useRef(false)
   const userRef = useRef(user)
   userRef.current = user
   const showToast = (msg: string) => { if(toastTimer.current) clearTimeout(toastTimer.current); setToast(msg); toastTimer.current = setTimeout(() => setToast(null), 3500) }
-  const clearSession = () => { sessionVersion.current++; refreshInFlight.current = false; setUser(null); setOrders([]); setOrder(null); setNotifications([]); setCart([]); setSelected(null); setError(null); setBanner(null); setScreen('login'); setChecking(false); setLoading(false) }
+  const clearSession = () => { sessionVersion.current++; refreshInFlight.current = null; menuLoaded.current = false; setUser(null); setMenu([]); setOrders([]); setOrder(null); setNotifications([]); setCart([]); setSelected(null); setError(null); setMenuError(null); setMenuLoading(false); setMenuCategory('All'); setBanner(null); setScreen('login'); setChecking(false); setLoading(false) }
   useEffect(() => {
     const expire = () => { const wasSignedIn = Boolean(userRef.current); clearSession(); if (wasSignedIn) showToast('Your session expired. Please sign in again.') }
     window.addEventListener(STUDENT_SESSION_EXPIRED, expire)
@@ -2111,18 +2113,44 @@ export default function App() {
   const refresh = async () => {
     if (!user || refreshInFlight.current) return
     const version = sessionVersion.current
-    refreshInFlight.current = true
+    const request = Symbol('student-refresh')
+    refreshInFlight.current = request
+    const current = () => version === sessionVersion.current && refreshInFlight.current === request
     setLoading(true)
-    const results = await Promise.allSettled([apiClient.getMenu(), apiClient.getOrders(), apiClient.getNotifications(), apiClient.getMe()])
-    if(version !== sessionVersion.current) return
-    const [m,o,n,u] = results
-    if(m.status === 'fulfilled') { setMenu(m.value); setCart(prev => prev.flatMap(line => { const current = m.value.find(item => item.id === line.item.id); return current ? [{...line,item:current}] : [] })) }
-    if(o.status === 'fulfilled') { setOrders(o.value); setOrder(prev => prev ? o.value.find(next => next.orderId === prev.orderId) ?? prev : null) }
-    if(n.status === 'fulfilled') setNotifications(n.value)
-    if(u.status === 'fulfilled' && u.value.user) setUser(u.value.user)
-    const failure = results.find(r => r.status === 'rejected')
-    setError(failure?.status === 'rejected' ? (failure.reason as Error).message : null)
-    setBanner(failure ? 'network' : null); setLoading(false); refreshInFlight.current = false
+    // Menu loading belongs to the menu request. Background polls keep existing food visible.
+    setMenuLoading(!menuLoaded.current)
+    const menuRequest = Promise.resolve().then(() => apiClient.getMenu()).then(items => {
+      if (!Array.isArray(items)) throw new Error('The canteen returned an invalid menu. Please retry.')
+      if (!current()) return
+      menuLoaded.current = true
+      setMenu(items)
+      setMenuError(null)
+      setCart(prev => prev.flatMap(line => { const next = items.find(item => item.id === line.item.id); return next ? [{ ...line, item: next }] : [] }))
+      setSelected(prev => prev ? items.find(item => item.id === prev.id) ?? { ...prev, available: false } : null)
+    }).catch(cause => {
+      if (current()) setMenuError(cause instanceof Error ? cause.message : 'Cannot load the menu. Please retry.')
+      throw cause
+    }).finally(() => { if (current()) setMenuLoading(false) })
+    try {
+      const results = await Promise.allSettled([menuRequest,
+        Promise.resolve().then(() => apiClient.getOrders()),
+        Promise.resolve().then(() => apiClient.getNotifications()),
+        Promise.resolve().then(() => apiClient.getMe())])
+      if (!current()) return
+      const [, ordersResult, notificationsResult, userResult] = results
+      if (ordersResult.status === 'fulfilled') { setOrders(ordersResult.value); setOrder(prev => prev ? ordersResult.value.find(next => next.orderId === prev.orderId) ?? prev : null) }
+      if (notificationsResult.status === 'fulfilled') setNotifications(notificationsResult.value)
+      if (userResult.status === 'fulfilled' && userResult.value.user) setUser(userResult.value.user)
+      const failure = results.find(result => result.status === 'rejected')
+      setError(failure?.status === 'rejected' ? (failure.reason as Error).message : null)
+      setBanner(failure ? 'network' : null)
+    } finally {
+      // An older session cannot unlock or clear the loading state of a newer request.
+      if (refreshInFlight.current === request) {
+        refreshInFlight.current = null
+        if (version === sessionVersion.current) { setLoading(false); setMenuLoading(false) }
+      }
+    }
   }
   useEffect(() => { if(!user) return; void refresh(); const timer = setInterval(() => { if (document.visibilityState === 'visible') void refresh() }, 15000); return () => clearInterval(timer) }, [user?.id])
   const loginUser = async (roll: string, passcode: string) => { const res = await apiClient.login(roll, passcode); if(res.success && res.user) { sessionVersion.current++; setUser(res.user); setScreen('home'); setError(null); showToast(`Welcome, ${res.user.name}!`) }; return res }
@@ -2164,9 +2192,9 @@ export default function App() {
   const pickup = async () => { if(!order) return; const version = sessionVersion.current; const next = await apiClient.pickupOrder(order.orderId); if(version !== sessionVersion.current) throw new Error('Your session changed. Sign in to check Your Orders.'); setOrder(next); await refresh() }
   const markRead = async () => { const version = sessionVersion.current; await apiClient.markAllNotificationsRead(); if(version === sessionVersion.current) setNotifications(prev => prev.map(n => ({...n,unread:false}))) }
   const store: Store = {
-    screen, user, menu, orders, order, notifications, loading, error, refresh, selectOrder: setOrder, submitOrder, completePayment, pickup, markRead,
+    screen, user, menu, orders, order, notifications, loading, error, menuLoading, menuError, menuCategory, setMenuCategory, refresh, selectOrder: setOrder, submitOrder, completePayment, pickup, markRead,
     go: next => { if(!user && next !== 'login') { setScreen('login'); return }; setScreen(next) }, loginUser, registerUser, logoutUser,
-    cart, add: (item, qty = 1) => { if(!item.available) { showToast('This item is currently unavailable'); return }; setCart(prev => { const old = prev.find(l => l.item.id === item.id); return old ? prev.map(l => l.item.id === item.id ? {...l,qty:l.qty+qty} : l) : [...prev,{item,qty}] }); showToast(`${item.name} added`) },
+    cart, add: (item, qty = 1) => { const current = menu.find(next => next.id === item.id); if(!current?.available) { showToast('This item is currently unavailable'); return }; setCart(prev => { const old = prev.find(l => l.item.id === current.id); return old ? prev.map(l => l.item.id === current.id ? {...l,qty:l.qty+qty} : l) : [...prev,{item:current,qty}] }); showToast(`${current.name} added`) },
     setQty: (id,qty) => setCart(prev => qty <= 0 ? prev.filter(l => l.item.id !== id) : prev.map(l => l.item.id === id ? {...l,qty} : l)), clear: () => setCart([]),
     cartCount: cart.reduce((sum,l) => sum+l.qty,0), cartTotal: cart.reduce((sum,l) => sum+l.qty*l.item.price,0), selected, select: setSelected, banner, setBanner, toast, showToast,
   }

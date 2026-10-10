@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { adminOperationsApi, type CatalogueItem } from '../lib/adminOperationsApi'
+import { foodImageSource } from '../lib/foodImageSource'
 
 export interface AlaCarteItem {
   id: string
   item_name: string
-  category: 'Snacks' | 'Meals' | 'Beverages' | 'Desserts' | 'Quick Bites'
+  category: CatalogueItem['category']
   price: number
   timing_window: string
   is_available: boolean
@@ -37,6 +38,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
   const [busy, setBusy] = useState(false)
   const mutationLock = useRef(false)
   const [formDescription, setFormDescription] = useState('')
+  const [formPhoto, setFormPhoto] = useState('')
   const [formPrep, setFormPrep] = useState('10')
   useEffect(() => {
     let active = true
@@ -72,7 +74,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
 
   const handleOpenAddModal = () => {
     if (loading || busy) return
-    setFormDescription(''); setFormPrep('10')
+    setError(''); setFormDescription(''); setFormPhoto(''); setFormPrep('10')
     setEditingItem(null)
     setFormName('')
     setFormCategory('Snacks')
@@ -85,7 +87,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
 
   const handleOpenEditModal = (item: AlaCarteItem) => {
     if (busy) return
-    setFormDescription(item.source.desc); setFormPrep(String(item.prep_time_mins))
+    setError(''); setFormDescription(item.source.desc); setFormPhoto(item.source.photo || ''); setFormPrep(String(item.prep_time_mins))
     setEditingItem(item)
     setFormName(item.item_name)
     setFormCategory(item.category)
@@ -101,11 +103,13 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
     if (!formName.trim()) return
     const price = Number(formPrice), prepMins = Number(formPrep)
     if (!Number.isFinite(price) || price <= 0 || !Number.isInteger(prepMins) || prepMins < 1) { setError('Enter a positive price and preparation time.'); return }
+    const photo = formPhoto.trim()
+    if (photo && !foodImageSource(photo)) { setError('Use a public HTTPS image URL or a local asset path beginning with /. Leave it blank to use the food fallback.'); return }
     void mutate(async () => {
       const payload = { name: formName.trim(), desc: formDescription.trim(), category: formCategory, price,
         timingWindow: formTiming, veg: formVeg, available: formAvailable, prepMins,
         emoji: editingItem?.source.emoji || (formCategory === 'Beverages' ? '🥤' : formCategory === 'Desserts' ? '🧁' : '🍽️'),
-        photo: editingItem?.source.photo || '', customizations: editingItem?.source.customizations || [] }
+        photo, customizations: editingItem?.source.customizations || [] }
       const saved = editingItem ? await adminOperationsApi.updateItem(editingItem.id, payload) : await adminOperationsApi.createItem(payload)
       setItems(prev => editingItem ? prev.map(row => row.id === saved.id ? toInventoryItem(saved) : row) : [toInventoryItem(saved), ...prev])
       setIsModalOpen(false)
@@ -299,6 +303,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
                                 {item.item_name}
                               </p>
                             </div>
+                            {item.source.desc && <p className="text-[11px] text-stone-500 mt-0.5 max-w-xs break-words">{item.source.desc}</p>}
                             <p className="text-[11px] text-stone-500 mt-0.5">
                               Avg Prep: {item.prep_time_mins} mins
                             </p>
@@ -439,7 +444,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
       {/* Add / Edit Item Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs animate-[sco-rise_0.2s_ease-out]">
-          <div className="w-full max-w-lg rounded-3xl bg-white border border-[#E5DFD7] p-8 shadow-2xl space-y-6">
+          <div className="w-full max-w-lg max-h-[calc(100dvh-2rem)] overflow-y-auto rounded-3xl bg-white border border-[#E5DFD7] p-8 shadow-2xl space-y-6">
             <div className="flex items-center justify-between pb-4 border-b border-[#E5DFD7]">
               <div>
                 <h4 className="text-lg font-bold text-[#1D1A16]">
@@ -460,8 +465,14 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
             <form onSubmit={handleSaveItem} className="space-y-4">
               {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <label className="text-xs font-bold text-stone-700">Description<input value={formDescription} onChange={e => setFormDescription(e.target.value)} className="mt-1 w-full rounded-xl border border-[#E5DFD7] bg-[#FAF7F3] p-3 text-sm font-normal" /></label>
+                <label className="text-xs font-bold text-stone-700">Description<input maxLength={255} value={formDescription} onChange={e => setFormDescription(e.target.value)} className="mt-1 w-full rounded-xl border border-[#E5DFD7] bg-[#FAF7F3] p-3 text-sm font-normal" /></label>
                 <label className="text-xs font-bold text-stone-700">Preparation (minutes)<input type="number" min="1" max="120" required value={formPrep} onChange={e => setFormPrep(e.target.value)} className="mt-1 w-full rounded-xl border border-[#E5DFD7] bg-[#FAF7F3] p-3 text-sm font-normal" /></label>
+              </div>
+
+              <div>
+                <label htmlFor="catalogue-photo" className="block text-xs font-bold uppercase tracking-wider text-stone-600 mb-1.5">Food Image (optional)</label>
+                <input id="catalogue-photo" type="text" inputMode="url" maxLength={500} value={formPhoto} onChange={e => setFormPhoto(e.target.value)} placeholder="https://… or /images/…" aria-describedby="catalogue-photo-help" className="w-full px-4 py-2.5 rounded-xl bg-[#FAF7F3] border border-[#E5DFD7] focus:border-[#F25C2C] focus:bg-white text-xs font-semibold text-[#1D1A16] outline-none transition-all" />
+                <p id="catalogue-photo-help" className="text-[11px] text-stone-500 mt-1.5">Use a public image of this dish. Clear the field to use the food fallback.</p>
               </div>
 
               <div>

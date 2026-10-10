@@ -117,26 +117,25 @@ async def update_student_profile(
 async def get_food_items(
     category: Optional[str] = Query(None, description="Category filter (Snacks, Meals, Beverages, All)"),
     veg: Optional[bool] = Query(None, description="Filter only vegetarian items"),
-    available_only: bool = Query(False, description="Filter only currently available items"),
+    available_only: bool = Query(True, deprecated=True, description="Public menu always excludes unavailable items; use the admin catalogue for inventory"),
     query: Optional[str] = Query(None, description="Search query string"),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Returns the rich menu catalogue with unit prices, photos, prep time, ratings,
-    and customization options. Cached in Redis for high throughput.
+    Returns available menu items with unit prices, photos, prep time, ratings,
+    and customization options. Unavailable records remain in admin inventory and
+    immutable order snapshots, never in this public catalogue.
     """
-    cache_key = f"canteen:food_items:{category}:{veg}:{available_only}:{query}"
+    cache_key = f"canteen:food_items:public_available_v1:{category}:{veg}:{query}"
     cached = await cache_get(cache_key)
     if cached:
         return cached
 
-    stmt = select(FoodItem)
+    stmt = select(FoodItem).where(FoodItem.is_available.is_(True))
     if category and category.lower() != "all":
         stmt = stmt.where(FoodItem.category.ilike(category.strip()))
     if veg is not None:
         stmt = stmt.where(FoodItem.veg == veg)
-    if available_only:
-        stmt = stmt.where(FoodItem.is_available == True)
     if query:
         stmt = stmt.where(
             or_(
@@ -163,14 +162,14 @@ async def get_food_item_detail(
     db: AsyncSession = Depends(get_db),
 ):
     """Retrieves full information for a single food item including customization options."""
-    stmt = select(FoodItem).where(FoodItem.id == item_id)
+    stmt = select(FoodItem).where(FoodItem.id == item_id, FoodItem.is_available.is_(True))
     res = await db.execute(stmt)
     item = res.scalar_one_or_none()
 
     if not item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Food item with ID '{item_id}' not found.",
+            detail="Food item not found or unavailable.",
         )
 
     return item.to_dict()
