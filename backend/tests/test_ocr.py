@@ -104,7 +104,7 @@ async def test_ocr_uses_explicit_configured_key_strict_schema_and_closes_client(
     assert calls["constructor"]["vertexai"] is False
     assert calls["constructor"]["http_options"].retry_options.attempts==1
     assert requests[0]["model"]=="gemini-2.5-flash"
-    assert requests[0]["config"].response_schema is ocr_router.WeeklyMenu
+    assert requests[0]["config"].response_schema == ocr_router.provider_menu_schema()
     assert calls["closed"] is True
 
 @pytest.mark.parametrize("code,status,hint",[(401,502,"credentials"),(403,502,"permissions"),(429,503,"quota"),(503,503,"temporarily"),(400,502,"OCR_MODEL"),(404,502,"OCR_MODEL"),(500,502,"unavailable")])
@@ -222,3 +222,50 @@ def test_sanitized_provider_diagnostics_preserve_error_not_credentials():
 def test_sanitized_provider_diagnostics_omit_oversized_payload():
     error = ocr_router.errors.APIError(400, {"error": {"code": 400, "message": "x" * 5000}})
     assert ocr_router.sanitized_provider_error(error, "private-key")["message"] == "[oversized provider message omitted]"
+
+
+async def test_real_sdk_wire_schema_omits_rejected_field_and_preserves_image(monkeypatch):
+    """Intercept the installed SDK's actual HTTP JSON, without contacting Gemini."""
+    import base64
+    import json
+    import httpx
+    observed = []
+    original_client = ocr_router.genai.Client
+
+    async def transport(request):
+        body = json.loads(request.content)
+        schema = body['generationConfig']['responseSchema']
+        serialized = json.dumps(schema)
+        assert 'additional_properties' not in serialized and 'additionalProperties' not in serialized
+        assert body['generationConfig']['responseMimeType'] == 'application/json'
+        assert schema['required'] == ['schedule']
+        meal = schema['properties']['schedule']['items']
+        assert meal['required'] == ['day', 'meal_type', 'items']
+        assert 'Monday' in meal['properties']['day']['enum']
+        assert set(meal['properties']['meal_type']['enum']) == {'breakfast', 'lunch', 'snacks', 'dinner'}
+        part = body['contents'][0]['parts'][0]['inlineData']
+        assert part.get('mimeType', part.get('mime_type')) == 'image/png'
+        with Image.open(io.BytesIO(base64.urlsafe_b64decode(part['data']))) as actual:
+            assert actual.format == 'PNG' and actual.size == (8, 8)
+        assert str(request.url) == 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+        observed.append(True)
+        return httpx.Response(200, json={'candidates': [{'content': {'role': 'model', 'parts': [
+            {'text': '{"schedule":[{"day":"Monday","meal_type":"lunch","items":["Dal","Rice"]}]}'}]}}]})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+    def client(**kwargs):
+        kwargs['http_options'] = kwargs['http_options'].model_copy(update={'httpx_async_client': http})
+        return original_client(**kwargs)
+    monkeypatch.setattr(ocr_router.genai, 'Client', client)
+    monkeypatch.setattr(ocr_router, 'settings', SimpleNamespace(GEMINI_API_KEY='offline-test-key', OCR_MODEL='gemini-2.5-flash', OCR_TIMEOUT_SECONDS=30))
+    result = await ocr_router.extract_menu(png(), 'image/png')
+    assert observed == [True] and result.schedule[0].items == ['Dal', 'Rice']
+    await http.aclose()  # The SDK leaves caller-owned HTTP clients to their owner.
+    assert http.is_closed
+
+
+def test_provider_schema_compatibility_does_not_relax_local_menu_validation():
+    with pytest.raises(ValidationError):
+        ocr_router.WeeklyMenu.model_validate({'schedule': [{'day': 'Monday', 'meal_type': 'lunch', 'items': ['Rice'], 'unexpected': 'ignored?'}]})
+    with pytest.raises(ValidationError):
+        ocr_router.WeeklyMenu.model_validate({'schedule': [{'day': 'Monday', 'meal_type': 'lunch', 'items': ['Rice']}], 'unexpected': True})
