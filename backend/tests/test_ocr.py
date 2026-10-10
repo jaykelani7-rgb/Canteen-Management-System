@@ -104,7 +104,8 @@ async def test_ocr_uses_explicit_configured_key_strict_schema_and_closes_client(
     assert calls["constructor"]["vertexai"] is False
     assert calls["constructor"]["http_options"].retry_options.attempts==1
     assert requests[0]["model"]=="gemini-2.5-flash"
-    assert requests[0]["config"].response_schema == ocr_router.provider_menu_schema()
+    assert requests[0]["config"].response_schema is None
+    assert calls["constructor"]["http_options"].extra_body['generationConfig']['responseFormat']['text']['schema'] == ocr_router.provider_menu_schema()
     assert calls["closed"] is True
 
 @pytest.mark.parametrize("code,status,hint",[(401,502,"credentials"),(403,502,"permissions"),(429,503,"quota"),(503,503,"temporarily"),(400,502,"OCR_MODEL"),(404,502,"OCR_MODEL"),(500,502,"unavailable")])
@@ -235,12 +236,17 @@ async def test_real_sdk_wire_schema_omits_rejected_field_and_preserves_image(mon
 
     async def transport(request):
         body = json.loads(request.content)
-        schema = body['generationConfig']['responseSchema']
+        assert 'responseSchema' not in body['generationConfig']
+        assert 'responseJsonSchema' not in body['generationConfig']
+        schema = body['generationConfig']['responseFormat']['text']['schema']
         serialized = json.dumps(schema)
-        assert 'additional_properties' not in serialized and 'additionalProperties' not in serialized
-        assert body['generationConfig']['responseMimeType'] == 'application/json'
+        assert 'additional_properties' not in serialized
+        assert schema['additionalProperties'] is False
+        assert body['generationConfig']['responseFormat']['text']['mimeType'] == 'application/json'
         assert schema['required'] == ['schedule']
-        meal = schema['properties']['schedule']['items']
+        meal = schema['$defs']['MenuMeal']
+        assert schema['properties']['schedule']['items']['$ref'] == '#/$defs/MenuMeal'
+        assert meal['additionalProperties'] is False
         assert meal['required'] == ['day', 'meal_type', 'items']
         assert 'Monday' in meal['properties']['day']['enum']
         assert set(meal['properties']['meal_type']['enum']) == {'breakfast', 'lunch', 'snacks', 'dinner'}
