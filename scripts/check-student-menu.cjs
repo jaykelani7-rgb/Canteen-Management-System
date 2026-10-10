@@ -50,6 +50,7 @@ function appHarness(overrides = {}) {
   const app = load('student/src/App.tsx', {
     react: runtime.react, '../../src/lib/apiClient': { apiClient: api, STUDENT_SESSION_EXPIRED: 'expired' },
     '../../src/lib/paymentCheckout': {}, '../../src/components/FoodImage': { default: function FoodImage() {} },
+    '../../src/components/FoodPhotoCredits': { default: function FoodPhotoCredits() {} },
   }, { setTimeout: () => 1, clearTimeout() {}, setInterval: runtime.setInterval, clearInterval: runtime.clearInterval,
     document: { visibilityState: 'visible' }, window: { addEventListener() {}, removeEventListener() {} } }, '\nexport { HomeScreen, MenuScreen };');
   function render() { runtime.begin('App'); runtime.store = app.default().props.value; runtime.commit(); return runtime.store; }

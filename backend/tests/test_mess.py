@@ -16,8 +16,10 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.schema import CreateSchema, DropSchema
+from schema_isolation import schema_test_engine, validate_test_schema
 
 from auth import create_access_token, get_password_hash, credential_fingerprint
+from config import settings
 from database import Base, get_db
 from main import app
 from models import AdminUser, StudentUser, MessSubscription, MessMealAttendance
@@ -30,49 +32,63 @@ PREFIX = "/api/admin/mess"
 
 @pytest_asyncio.fixture
 async def mess_client(monkeypatch):
+    monkeypatch.setattr(settings, "PUBLIC_API_ORIGIN", "http://test")
     url = os.getenv("MESS_TEST_DATABASE_URL", "sqlite+aiosqlite:///:memory:")
     schema = "mess_test_" + uuid.uuid4().hex
     postgres = url.startswith("postgresql")
-    admin_engine = create_async_engine(url)
-    if postgres:
-        async with admin_engine.begin() as conn:
-            await conn.execute(CreateSchema(schema))
-        engine = create_async_engine(url, connect_args={"server_settings": {"search_path": schema}, "statement_cache_size": 0})
-    else:
-        engine = admin_engine
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
-    monkeypatch.setattr(mess_routes, "mess_today", lambda: DAY)
-    async def no_cache(*args, **kwargs):
-        return None
-    for name in ["cache_get", "cache_set", "cache_invalidate_prefix"]:
-        monkeypatch.setattr(mess_routes, name, no_cache)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    async with sessions() as db:
-        admin_password_hash = get_password_hash("test-password")
-        db.add(AdminUser(username="test-admin", hashed_password=admin_password_hash, role="admin", is_active=True))
-        db.add(StudentUser(id="linked-student", roll_number="21CS1042", name="Aarav Sharma", email="aarav@test.invalid", hashed_passcode="unused", branch="CS"))
-        await mess_routes.ensure_mess_plans(db)
-        await db.commit()
-    async def override_db():
-        async with sessions() as db:
-            try:
-                yield db
-            except Exception:
-                await db.rollback()
-                raise
-    app.dependency_overrides[get_db] = override_db
-    token = create_access_token({"sub": "test-admin", "role": "admin", "credential_version": credential_fingerprint(admin_password_hash)})
+    owner = create_async_engine(url)
+    engine = owner
+    created = False
+    previous_override = app.dependency_overrides.get(get_db)
     try:
+        if postgres:
+            validate_test_schema(schema)
+            async with owner.begin() as conn:
+                await conn.execute(CreateSchema(schema))
+            created = True
+            engine = schema_test_engine(url, schema)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        monkeypatch.setattr(mess_routes, "mess_today", lambda: DAY)
+        async def no_cache(*args, **kwargs):
+            return None
+        for name in ["cache_get", "cache_set", "cache_invalidate_prefix"]:
+            monkeypatch.setattr(mess_routes, name, no_cache)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            if postgres:
+                # Base.metadata already creates this sequence. Verify that its
+                # unqualified resolution cannot consume the live public one.
+                actual = (await conn.execute(text("SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.oid=to_regclass('canteen_order_number_seq') AND c.relkind='S'"))).scalar_one()
+                assert actual == schema
+        async with sessions() as db:
+            admin_password_hash = get_password_hash("test-password")
+            db.add(AdminUser(username="test-admin", hashed_password=admin_password_hash, role="admin", is_active=True))
+            db.add(StudentUser(id="linked-student", roll_number="21CS1042", name="Aarav Sharma", email="aarav@test.invalid", hashed_passcode="unused", branch="CS"))
+            await mess_routes.ensure_mess_plans(db)
+            await db.commit()
+        async def override_db():
+            async with sessions() as db:
+                try:
+                    yield db
+                except Exception:
+                    await db.rollback()
+                    raise
+        app.dependency_overrides[get_db] = override_db
+        token = create_access_token({"sub": "test-admin", "role": "admin", "credential_version": credential_fingerprint(admin_password_hash)})
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers={"Authorization": "Bearer " + token}) as client:
             yield client, sessions, postgres
     finally:
-        app.dependency_overrides.pop(get_db, None)
-        await engine.dispose()
-        if postgres:
-            async with admin_engine.begin() as conn:
+        if previous_override is None:
+            app.dependency_overrides.pop(get_db, None)
+        else:
+            app.dependency_overrides[get_db] = previous_override
+        if engine is not owner:
+            await engine.dispose()
+        if created:
+            validate_test_schema(schema)
+            async with owner.begin() as conn:
                 await conn.execute(DropSchema(schema, cascade=True))
-            await admin_engine.dispose()
+        await owner.dispose()
 
 
 def payload(plan="double", roll="24CS9999", **changes):

@@ -7,6 +7,7 @@ from alembic import context
 from sqlalchemy import pool, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from config import settings
+from migrations.schema_guard import constrain_transactions_to_schema
 from database import Base
 import models
 import recovery_models
@@ -21,15 +22,14 @@ if schema and not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,62}", schema):
     raise RuntimeError("Invalid migration schema identifier")
 
 def run_sync(connection):
-    if schema:
-        connection.execute(text('SET search_path TO "' + schema + '"'))
-        connection.commit()
     context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
     with context.begin_transaction():
         context.run_migrations()
 
 async def run_online():
     engine = create_async_engine(url, poolclass=pool.NullPool, connect_args={"statement_cache_size": 0})
+    if schema:
+        constrain_transactions_to_schema(engine.sync_engine, schema)
     try:
         async with engine.connect() as connection:
             await connection.run_sync(run_sync)

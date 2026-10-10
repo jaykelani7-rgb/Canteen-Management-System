@@ -2,12 +2,13 @@
 import asyncio
 import io
 import logging
+import httpx
 from typing import Literal
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from auth import get_current_admin
 from config import settings
 from models import AdminUser
@@ -69,10 +70,15 @@ def validate_image(image_bytes: bytes, content_type: str) -> str:
         raise HTTPException(400, "Upload a valid, non-animated JPEG, PNG or WebP image within the size and pixel limits.") from cause
 
 async def extract_menu(image_bytes: bytes, mime_type: str) -> WeeklyMenu:
+    api_key = str(getattr(settings, "GEMINI_API_KEY", "") or "").strip()
+    if not api_key:
+        logger.warning("Menu extraction unavailable: GEMINI_API_KEY is not configured")
+        raise HTTPException(503, "Menu extraction is not configured. Set GEMINI_API_KEY privately in the Render backend environment, then redeploy. Do not enter the key in this app.")
     timeout = float(getattr(settings, "OCR_TIMEOUT_SECONDS", 30))
     client = None
     try:
-        client = genai.Client(http_options=types.HttpOptions(timeout=int(timeout * 1000)))
+        client = genai.Client(api_key=api_key, vertexai=False,
+            http_options=types.HttpOptions(timeout=int(timeout * 1000), retry_options=types.HttpRetryOptions(attempts=1)))
         async with asyncio.timeout(timeout):
             response = await client.aio.models.generate_content(
                 model=getattr(settings, "OCR_MODEL", "gemini-2.5-flash"),
@@ -83,9 +89,21 @@ async def extract_menu(image_bytes: bytes, mime_type: str) -> WeeklyMenu:
         if not response.text:
             raise ValueError("Empty extraction")
         return WeeklyMenu.model_validate_json(response.text)
-    except TimeoutError as cause:
+    except (TimeoutError, httpx.TimeoutException) as cause:
         logger.warning("Menu extraction timed out")
         raise HTTPException(504, "Menu extraction timed out. Please try a clearer or smaller image.") from cause
+    except errors.APIError as cause:
+        logger.warning("Menu extraction provider error (HTTP %s)", cause.code)
+        if cause.code in (401, 403):
+            raise HTTPException(502, "The OCR provider rejected its credentials or permissions. Ask the operator to check GEMINI_API_KEY privately in Render.") from cause
+        if cause.code in (429, 503):
+            raise HTTPException(503, "The OCR provider is temporarily unavailable or its free quota is exhausted. Wait before retrying; do not upgrade the plan automatically.", headers={"Retry-After": "60"}) from cause
+        if cause.code in (400, 404):
+            raise HTTPException(502, "The OCR provider rejected the request or configured model. Ask the operator to check OCR_MODEL and GEMINI_API_KEY privately in Render.") from cause
+        raise HTTPException(502, "The OCR provider is unavailable. Please try again later.") from cause
+    except (ValueError, ValidationError) as cause:
+        logger.warning("Menu extraction returned an invalid menu (%s)", type(cause).__name__)
+        raise HTTPException(502, "No valid weekly menu could be extracted. Try a clearer photograph, then review the extracted dishes before saving.") from cause
     except Exception as cause:
         # Keep provider messages, credentials and raw response contents out of public errors/logs.
         logger.warning("Menu extraction failed (%s)", type(cause).__name__)

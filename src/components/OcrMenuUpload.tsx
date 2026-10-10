@@ -50,8 +50,8 @@ export default function OcrMenuUpload({
 
   const processSelectedFile = (file: File) => {
     if (requestLock.current) return
-    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 10 * 1024 * 1024) {
-      setError('Choose a PNG, JPEG, or WebP image up to 10 MB.'); return
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || !file.size || file.size > 5 * 1024 * 1024) {
+      setError('Choose a nonempty PNG, JPEG, or WebP image up to 5 MiB.'); return
     }
     setFile(file); setError('')
 
@@ -204,7 +204,7 @@ export default function OcrMenuUpload({
                 <span className="text-[#F25C2C] underline underline-offset-4">browse file</span>
               </p>
               <p className="text-xs text-stone-500 mt-1 max-w-sm">
-                Supports PNG, JPG, JPEG, and WebP images up to 10MB (handwritten or printed cafeteria charts).
+                Supports PNG, JPG, JPEG, and WebP images up to 5 MiB (handwritten or printed cafeteria charts).
               </p>
 
               {/* Quick sample badge */}

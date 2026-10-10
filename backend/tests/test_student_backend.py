@@ -5,13 +5,16 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.schema import CreateSchema, DropSchema
+from schema_isolation import schema_test_engine, validate_test_schema
 
 from main import app
 from auth import create_access_token, get_password_hash, credential_fingerprint
 from config import settings
 import main
 from database import Base, get_db
-from models import AdminUser
+from models import AdminUser, FoodItem
+from sqlalchemy import select
+from image_fixtures import attach_test_image
 import mess_routes
 import routes
 import seed_data
@@ -25,13 +28,9 @@ async def client():
     postgres = url.startswith("postgresql")
     schema = "student_test_" + uuid.uuid4().hex
     admin_engine = create_async_engine(url)
-    if postgres:
-        async with admin_engine.begin() as connection:
-            await connection.execute(CreateSchema(schema))
-        engine = create_async_engine(url, connect_args={"server_settings": {"search_path": schema}, "statement_cache_size": 0})
-    else:
-        engine = admin_engine
-    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    engine = admin_engine
+    created = False
+    sessions = None
     patches = pytest.MonkeyPatch()
 
     async def initialize_schema():
@@ -51,7 +50,15 @@ async def client():
 
     previous_override = app.dependency_overrides.get(get_db)
     try:
+        if postgres:
+            validate_test_schema(schema)
+            async with admin_engine.begin() as connection:
+                await connection.execute(CreateSchema(schema))
+            created = True
+            engine = schema_test_engine(url, schema)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
         patches.setattr(settings, "ENVIRONMENT", "test")
+        patches.setattr(settings, "PUBLIC_API_ORIGIN", "http://test")
         patches.setattr(settings, "ENABLE_DEMO_DATA", True)
         patches.setattr(settings, "RATE_LIMIT_ENABLED", False)
         patches.setattr(settings, "PAYMENT_PROVIDER", "disabled")
@@ -67,7 +74,13 @@ async def client():
         await seed_data.seed()
         async with sessions() as session:
             admin_hash = get_password_hash("test-only-password")
-            session.add(AdminUser(username="regression-admin", hashed_password=admin_hash, role="admin", is_active=True))
+            admin=AdminUser(username="regression-admin", hashed_password=admin_hash, role="admin", is_active=True)
+            session.add(admin)
+            await session.flush()
+            # Seed only this disposable test schema with genuine generated WebP
+            # associations; production publication requirements remain unchanged.
+            for item in (await session.execute(select(FoodItem))).scalars():
+                await attach_test_image(session,item,admin_id=admin.id)
             await session.commit()
         app.dependency_overrides[get_db] = override_db
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
@@ -79,11 +92,13 @@ async def client():
         else:
             app.dependency_overrides[get_db] = previous_override
         patches.undo()
-        await engine.dispose()
-        if postgres:
+        if engine is not admin_engine:
+            await engine.dispose()
+        if created:
+            validate_test_schema(schema)
             async with admin_engine.begin() as connection:
                 await connection.execute(DropSchema(schema, cascade=True))
-            await admin_engine.dispose()
+        await admin_engine.dispose()
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -289,6 +304,7 @@ async def test_get_food_item_detail(client: AsyncClient):
     assert item["id"] == "veg-burger"
     assert item["price"] == 60.0
     assert len(item["customizations"]) >= 1
+    assert item["imageConfirmed"] is True and item["photo"].startswith("http://test/api/food-images/")
 
 
 @pytest.mark.asyncio
@@ -363,6 +379,9 @@ async def test_place_order_with_wallet(client: AsyncClient, auth_headers: dict):
     assert order["pickupCounter"] in ("Counter 1", "Counter 2")
     assert order["queuePosition"] >= 1
     assert len(order["items"]) == 2
+    assert order["itemTotal"] == order["total"] == 90
+    assert order["packagingFee"] == order["gst"] == 0
+    assert all(item["photo"].startswith("http://test/api/food-images/") for item in order["items"])
     after = (await client.get("/api/student/wallet", headers=auth_headers)).json()["walletBalance"]
     assert after == pytest.approx(before - order["total"], 0.01)
 

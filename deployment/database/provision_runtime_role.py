@@ -17,12 +17,12 @@ import psycopg2
 from psycopg2 import extensions, sql
 
 
-HEAD = "0005_secure_recovery"
+HEAD = "0006_food_images"
 APP_TABLES = frozenset({
     "weekly_menu", "ala_carte", "food_items", "admin_users", "students", "orders",
     "wallet_transactions", "notifications", "feedback_reviews", "password_reset_otps",
     "mess_plans", "mess_subscriptions", "mess_meal_attendance", "notification_reads",
-    "recovery_challenges", "payment_intents", "payment_refunds", "payment_events",
+    "recovery_challenges", "payment_intents", "payment_refunds", "payment_events", "food_images",
 })
 NAME = re.compile(r"[a-z][a-z0-9_]{0,62}\Z")
 SERVICE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}\Z")

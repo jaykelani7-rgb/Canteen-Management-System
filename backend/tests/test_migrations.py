@@ -11,6 +11,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import inspect,text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.schema import CreateSchema,DropSchema
+from schema_isolation import schema_test_engine, validate_test_schema
 from migrations.legacy_schema import Base as LegacyBase
 from migrations.preflight import validate_legacy_schema,validate_financial_data
 
@@ -19,17 +20,26 @@ async def migration_db(monkeypatch):
     url=os.getenv("MESS_TEST_DATABASE_URL")
     if not url or not url.startswith("postgresql"): pytest.skip("Financial migration verification requires PostgreSQL")
     schema="migration_test_"+uuid.uuid4().hex
+    validate_test_schema(schema)
     owner=create_async_engine(url)
-    async with owner.begin() as connection: await connection.execute(CreateSchema(schema))
-    engine=create_async_engine(url,connect_args={"server_settings":{"search_path":schema},"statement_cache_size":0})
-    monkeypatch.setenv("MIGRATION_DATABASE_URL",url)
-    monkeypatch.setenv("MIGRATION_SCHEMA",schema)
-    config=Config(str(Path(__file__).resolve().parents[1]/"alembic.ini"))
-    try: yield engine,config
+    engine=owner
+    created=False
+    try:
+        async with owner.begin() as connection:
+            await connection.execute(CreateSchema(schema))
+        created=True
+        engine=schema_test_engine(url,schema)
+        monkeypatch.setenv("MIGRATION_DATABASE_URL",url)
+        monkeypatch.setenv("MIGRATION_SCHEMA",schema)
+        config=Config(str(Path(__file__).resolve().parents[1]/"alembic.ini"))
+        yield engine,config
     finally:
-        await engine.dispose()
-        assert schema.startswith("migration_test_")
-        async with owner.begin() as connection: await connection.execute(DropSchema(schema,cascade=True))
+        if engine is not owner:
+            await engine.dispose()
+        if created:
+            validate_test_schema(schema)
+            async with owner.begin() as connection:
+                await connection.execute(DropSchema(schema,cascade=True))
         await owner.dispose()
 
 async def test_frozen_baseline_upgrades_money_and_preserves_data(migration_db):

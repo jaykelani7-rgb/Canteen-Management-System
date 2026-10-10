@@ -58,6 +58,7 @@ def test_ocr_validates_provider_schedule(schedule):
 async def test_ocr_provider_errors_are_generic(monkeypatch):
     def broken(**kwargs): raise RuntimeError("provider-sensitive-internal-detail")
     monkeypatch.setattr(ocr_router.genai,"Client",broken)
+    monkeypatch.setattr(ocr_router,"settings",SimpleNamespace(GEMINI_API_KEY="test-only-key"))
     with pytest.raises(HTTPException) as error: await ocr_router.extract_menu(png(),"image/png")
     assert error.value.status_code==502
     assert "sensitive" not in error.value.detail
@@ -67,6 +68,67 @@ async def test_ocr_provider_timeout_is_bounded(monkeypatch):
     async def generate(**kwargs): await asyncio.sleep(1)
     async def close(): pass
     monkeypatch.setattr(ocr_router.genai,"Client",lambda **kwargs: SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate),aclose=close)))
-    monkeypatch.setattr(ocr_router,"settings",SimpleNamespace(OCR_TIMEOUT_SECONDS=0.01))
+    monkeypatch.setattr(ocr_router,"settings",SimpleNamespace(GEMINI_API_KEY="test-only-key",OCR_TIMEOUT_SECONDS=0.01))
     with pytest.raises(HTTPException) as error: await ocr_router.extract_menu(png(),"image/png")
     assert error.value.status_code==504
+
+@pytest.mark.parametrize("key", ["", "   ", None])
+async def test_ocr_missing_key_is_actionable_without_constructing_provider(monkeypatch,key,caplog):
+    def forbidden(**kwargs): raise AssertionError("Provider must not be constructed without configuration")
+    monkeypatch.setattr(ocr_router.genai,"Client",forbidden)
+    monkeypatch.setattr(ocr_router,"settings",SimpleNamespace(GEMINI_API_KEY=key))
+    with pytest.raises(HTTPException) as error: await ocr_router.extract_menu(png(),"image/png")
+    assert error.value.status_code==503
+    assert "GEMINI_API_KEY" in error.value.detail and "privately" in error.value.detail
+    assert "not configured" in caplog.text
+
+def provider(monkeypatch,generate,key="test-only-sensitive-key",timeout=30):
+    calls={"closed":False}
+    async def close(): calls["closed"]=True
+    def client(**kwargs):
+        calls["constructor"]=kwargs
+        return SimpleNamespace(aio=SimpleNamespace(models=SimpleNamespace(generate_content=generate),aclose=close))
+    monkeypatch.setattr(ocr_router.genai,"Client",client)
+    monkeypatch.setattr(ocr_router,"settings",SimpleNamespace(GEMINI_API_KEY=key,OCR_MODEL="gemini-2.5-flash",OCR_TIMEOUT_SECONDS=timeout))
+    return calls
+
+async def test_ocr_uses_explicit_configured_key_strict_schema_and_closes_client(monkeypatch):
+    requests=[]
+    async def generate(**kwargs):
+        requests.append(kwargs)
+        return SimpleNamespace(text='{"schedule":[{"day":"monday","meal_type":"LUNCH","items":["Dal","Rice"]}]}')
+    calls=provider(monkeypatch,generate)
+    extracted=await ocr_router.extract_menu(png(),"image/png")
+    assert extracted.schedule[0].day=="Monday" and extracted.schedule[0].meal_type=="lunch"
+    assert calls["constructor"]["api_key"]=="test-only-sensitive-key"
+    assert calls["constructor"]["vertexai"] is False
+    assert calls["constructor"]["http_options"].retry_options.attempts==1
+    assert requests[0]["model"]=="gemini-2.5-flash"
+    assert requests[0]["config"].response_schema is ocr_router.WeeklyMenu
+    assert calls["closed"] is True
+
+@pytest.mark.parametrize("code,status,hint",[(401,502,"credentials"),(403,502,"permissions"),(429,503,"quota"),(503,503,"temporarily"),(400,502,"OCR_MODEL"),(404,502,"OCR_MODEL"),(500,502,"unavailable")])
+async def test_ocr_provider_error_classification_is_sanitized(monkeypatch,caplog,code,status,hint):
+    async def generate(**kwargs):
+        raise ocr_router.errors.APIError(code,{"error":{"code":code,"message":"provider-sensitive-internal-detail test-only-sensitive-key"}})
+    calls=provider(monkeypatch,generate)
+    with pytest.raises(HTTPException) as error: await ocr_router.extract_menu(png(),"image/png")
+    assert error.value.status_code==status and hint in error.value.detail
+    assert "sensitive" not in error.value.detail and "sensitive" not in caplog.text
+    assert calls["closed"] is True
+    if code in (429,503): assert error.value.headers=={"Retry-After":"60"}
+
+@pytest.mark.parametrize("body",[None,"", "not-json", '{"schedule":[]}', '{"schedule":[{"day":"Monday","meal_type":"brunch","items":["Rice"]}]}', '{"schedule":[{"day":"Monday","meal_type":"lunch","items":["Rice"]},{"day":"Monday","meal_type":"lunch","items":["Dal"]}]}'])
+async def test_ocr_malformed_or_invalid_provider_response_requires_retry_not_save(monkeypatch,body):
+    async def generate(**kwargs): return SimpleNamespace(text=body)
+    calls=provider(monkeypatch,generate)
+    with pytest.raises(HTTPException) as error: await ocr_router.extract_menu(png(),"image/png")
+    assert error.value.status_code==502 and "review" in error.value.detail
+    assert calls["closed"] is True
+
+async def test_ocr_sdk_network_timeout_is_actionable_and_does_not_leak(monkeypatch):
+    async def generate(**kwargs): raise ocr_router.httpx.ReadTimeout("test-only-sensitive-key")
+    calls=provider(monkeypatch,generate)
+    with pytest.raises(HTTPException) as error: await ocr_router.extract_menu(png(),"image/png")
+    assert error.value.status_code==504 and "sensitive" not in error.value.detail
+    assert calls["closed"] is True

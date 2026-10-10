@@ -1,4 +1,4 @@
-"""Operator-only synthetic QA credit. No public HTTP route or payment capture."""
+"""Synthetic QA credit with a default-disabled staging admin route; no payment capture."""
 from decimal import Decimal
 
 from fastapi import HTTPException

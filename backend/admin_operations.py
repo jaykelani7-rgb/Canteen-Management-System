@@ -9,7 +9,7 @@ import uuid
 from typing import Literal
 from fastapi import APIRouter,Depends,HTTPException,Query
 from pydantic import BaseModel,ConfigDict,Field,field_validator
-from sqlalchemy import func,select
+from sqlalchemy import func,select,text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from auth import get_current_admin
@@ -17,6 +17,7 @@ from database import cache_invalidate_prefix,get_db,get_redis_client
 from models import AdminUser,FoodItem,Order,OrderStatusEnum,StudentUser
 from schemas import FoodItemResponse
 from image_service import apply_catalogue_image
+from config import settings
 
 IST=timezone(timedelta(hours=5,minutes=30))
 ACTIVE_STATES=("Queued","Preparing","Ready","Delayed")
@@ -174,13 +175,27 @@ async def operations_status(db:AsyncSession=Depends(get_db),admin:AdminUser=Depe
     try: redis_available=bool(await asyncio.wait_for(get_redis_client().ping(),timeout=2))
     except Exception: redis_available=False
     return {"serviceOnline":True,"pendingOrders":active,"countQueued":queued,"activeWindow":window,"redisAvailable":redis_available}
+async def require_staging_qa_credit_database(db):
+    """The optional QA route is never available outside the dedicated staging database."""
+    if (not getattr(settings,"STAGING_QA_WALLET_ENABLED",False)
+            or getattr(settings,"DEPLOYMENT_TIER","")!="staging"
+            or not getattr(settings,"STAGING_QA_STUDENT_ID","")
+            or not getattr(settings,"STAGING_QA_STUDENT_ROLL","")
+            or settings.PAYMENT_PROVIDER!="disabled"
+            or db.bind.dialect.name!="postgresql"):
+        raise HTTPException(404,"Not found")
+    if (await db.execute(text("SELECT current_database()"))).scalar_one()!="canteen_staging":
+        raise HTTPException(404,"Not found")
+
+
 @admin_operations_router.post("/qa-wallet-credit")
 async def credit_qa_wallet_test(db: AsyncSession = Depends(get_db), admin: AdminUser = Depends(get_current_admin)):
     from staging_wallet import credit_staging_qa_wallet
-    from sqlalchemy import select
-    from models import StudentUser
-    student = (await db.execute(select(StudentUser).where(StudentUser.name == "STAGING QA Student"))).scalars().first()
-    if not student:
-        from fastapi import HTTPException
-        raise HTTPException(404, "STAGING QA Student not found")
-    return await credit_staging_qa_wallet(db, student.id, student.roll_number)
+    await require_staging_qa_credit_database(db)
+    student=(await db.execute(select(StudentUser).where(StudentUser.id==settings.STAGING_QA_STUDENT_ID))).scalar_one_or_none()
+    if (student is None or not student.is_active or student.name!="STAGING QA Student"
+            or student.roll_number!=settings.STAGING_QA_STUDENT_ROLL):
+        raise HTTPException(404,"Verified staging QA account not found")
+    # No request-supplied identity or amount; the service locks the same student row
+    # used by checkout and preserves the single uniquely named credit ledger entry.
+    return await credit_staging_qa_wallet(db,student.id,student.roll_number)

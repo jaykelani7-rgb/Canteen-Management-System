@@ -144,3 +144,7 @@
 *.stl                filter=lfs diff=lfs merge=lfs -text
 *.nc                 filter=lfs diff=lfs merge=lfs -text
 *.mat                filter=lfs diff=lfs merge=lfs -text
+
+# Small licensed menu photographs must be available in a normal public clone.
+# Render and bundled Android builds must not depend on Git LFS downloads.
+backend/food_assets/*.webp -filter -diff -merge -text

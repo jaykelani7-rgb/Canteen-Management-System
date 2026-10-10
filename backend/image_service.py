@@ -35,6 +35,14 @@ class ImageUploadMetadata(BaseModel):
     rightsConfirmed: bool
     author: str = Field(default="", max_length=200)
     licenseUrl: str = Field(default="", max_length=1000)
+    modifications: str = Field(default="", max_length=255)
+
+    @field_validator("modifications")
+    @classmethod
+    def bounded_modifications(cls,value):
+        if value and len(value) + len(MODIFICATIONS) + 1 > 255:
+            raise ValueError("Describe source photo changes briefly so the full optimization note can be retained")
+        return value
 
     @field_validator("licenseUrl")
     @classmethod
@@ -45,7 +53,7 @@ class ImageUploadMetadata(BaseModel):
                 raise ValueError("Licence links must be public HTTPS URLs without credentials")
         return value
 
-    @field_validator("dishName", "source", "license", "attribution", "author")
+    @field_validator("dishName", "source", "license", "attribution", "author", "modifications")
     @classmethod
     def readable_text(cls, value):
         if any(ord(char) < 32 and char not in "\n\t" for char in value):
@@ -98,6 +106,8 @@ def optimize_photo(raw, declared_mime):
                 decoded.load()
                 oriented = ImageOps.exif_transpose(decoded)
                 oriented.thumbnail((MAX_EDGE, MAX_EDGE), Image.Resampling.LANCZOS)
+                if min(oriented.size) < 64:
+                    raise HTTPException(422, "Choose a photograph with a less extreme aspect ratio")
                 mode = "RGBA" if "A" in oriented.getbands() else "RGB"
                 converted = oriented.convert(mode)
                 clean = Image.new(mode, converted.size)
@@ -148,7 +158,7 @@ async def persist_photo(db, raw, width, height, metadata, admin_id):
     row = FoodImage(id=uuid.uuid4().hex, dish_name=metadata.dishName, data=raw, sha256=digest,
         mime_type="image/webp", width=width, height=height, byte_size=len(raw), source=metadata.source,
         license=metadata.license, license_url=metadata.licenseUrl or None, author=metadata.author or None,
-        attribution=metadata.attribution, modifications=MODIFICATIONS, rights_confirmed=True,
+        attribution=metadata.attribution, modifications=" ".join(part for part in (metadata.modifications,MODIFICATIONS) if part), rights_confirmed=True,
         uploaded_by_admin_id=admin_id, is_archived=False)
     db.add(row)
     await db.flush()

@@ -1,5 +1,4 @@
 """Admin-only library operations; public immutable bytes only after publication."""
-import hashlib
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -9,7 +8,7 @@ from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException
 
 from auth import get_current_admin
-from database import cache_invalidate_prefix, get_db
+from database import get_db
 from food_image_models import FoodImage
 from models import FoodItem
 from image_service import (ImageUploadMetadata, MAX_EDGE, MAX_IMAGE_PIXELS, MAX_OUTPUT_BYTES, MAX_UPLOAD_BYTES,
@@ -48,6 +47,8 @@ async def upload(request: Request, admin=Depends(get_current_admin), db=Depends(
     request._body = bytes(body)
     try:
         async with request.form(max_files=1, max_fields=9, max_part_size=4096) as form:
+            if any(len(form.getlist(key)) != 1 for key in form):
+                raise HTTPException(422, "Image form fields must not be repeated")
             file = form.get("file")
             if not isinstance(file, UploadFile):
                 raise HTTPException(400, "Choose a photograph to upload")

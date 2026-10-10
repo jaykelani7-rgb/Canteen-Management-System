@@ -1084,7 +1084,7 @@ function HomeScreen() {
         <SearchBar />
       </div>
 
-      {menuLoading && menu.length === 0 && <p role="status" className="px-5 pt-4 text-sm text-ink-soft">Loading your canteen…</p>}
+      {menuLoading && MENU.length === 0 && <p role="status" className="px-5 pt-4 text-sm text-ink-soft">Loading your canteen…</p>}
       {menuError && <div role="alert" className="mx-5 mt-4 rounded-2xl bg-berry-soft p-4 text-sm text-berry">{menuError}<button className="ml-3 font-bold" onClick={() => { void refresh() }}>Retry</button></div>}
       {liveOrder && <button onClick={() => { selectOrder(liveOrder); go(liveOrder.status === 'Ready' ? 'ready' : 'tracking') }} className="mx-5 mt-4 flex w-[calc(100%-2.5rem)] items-center gap-3 rounded-3xl bg-ink p-4 text-left text-white">
         <div className="grid h-12 w-12 place-items-center rounded-2xl bg-tangerine text-xl">🍔</div>
@@ -1793,6 +1793,7 @@ function OrderDetailsScreen() {
                   <div className="flex-1">
                     <p className="text-sm font-bold">{it.name}</p>
                     <p className="text-xs text-ink-soft">Qty {it.qty}</p>
+                    <FoodPhotoCredits url={it.photoCredits || (!it.photo ? m?.photoCredits : undefined)} />
                   </div>
                   <span className="font-mono text-sm font-semibold">
                     {rupee(it.price * it.qty)}

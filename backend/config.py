@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     ORDER_GST_BASIS_POINTS: int = Field(default=0, ge=0, le=10000)
     PUBLIC_API_ORIGIN: str = ""
     FOOD_IMAGE_LIBRARY_MAX_BYTES: int = Field(default=67108864, ge=1048576, le=268435456)
+    DEPLOYMENT_TIER: Literal["development", "staging", "production"] = "development"
+    STAGING_QA_WALLET_ENABLED: bool = False
+    STAGING_QA_STUDENT_ID: str = ""
+    STAGING_QA_STUDENT_ROLL: str = ""
+    GEMINI_API_KEY: str = ""
+    OCR_MODEL: str = "gemini-2.5-flash"
+    OCR_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=60)
 
     @model_validator(mode="after")
     def validate_public_api_origin(self):
