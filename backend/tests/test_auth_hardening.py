@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import os
 import jwt
 import pytest
 from fastapi import HTTPException
@@ -16,6 +17,22 @@ import rate_limit
 @pytest.fixture(autouse=True)
 def disable_admission_for_auth_tests(monkeypatch):
     monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", False)
+
+
+@pytest.fixture
+def production_configuration():
+    # Constructor values take precedence over CI's demo-enabled test environment.
+    # Each test receives a fresh mapping; no process environment is modified.
+    return {"ENVIRONMENT": "production", "DATABASE_URL": "postgresql+asyncpg://test@localhost/test",
+            "SECRET_KEY": "only-for-configuration-unit-tests-" + "x" * 32,
+            "ENABLE_DEMO_DATA": False, "AUTO_CREATE_SCHEMA": False,
+            "PAYMENT_PROVIDER": "disabled", "PASSCODE_RECOVERY_ENABLED": False,
+            "SESSION_COOKIE_MODE_ENABLED": True, "STAGING_QA_WALLET_ENABLED": False,
+            "DEPLOYMENT_TIER": "production", "PUBLIC_API_ORIGIN": "https://api.example.invalid",
+            "CORS_ORIGINS": ["https://student.example.invalid", "https://admin.example.invalid"],
+            "STUDENT_CORS_ORIGINS": ["https://student.example.invalid"],
+            "ADMIN_CORS_ORIGINS": ["https://admin.example.invalid"],
+            "TRUSTED_HOSTS": ["student.example.invalid", "admin.example.invalid"]}
 
 
 async def make_student(sessions):
@@ -113,13 +130,9 @@ def test_bcrypt_never_truncates_long_credentials():
     {"SECRET_KEY": "weak"}, {"CORS_ORIGINS": ["*"]}, {"TRUSTED_HOSTS": ["*"]},
     {"AUTO_CREATE_SCHEMA": True}, {"PAYMENT_PROVIDER": "razorpay"},
 ])
-def test_production_rejects_unsafe_configuration(overrides):
-    values = {"ENVIRONMENT": "production", "DATABASE_URL": "postgresql+asyncpg://test@localhost/test",
-              "SECRET_KEY": "only-for-configuration-unit-tests-" + "x" * 32,
-              "CORS_ORIGINS": ["https://student.example.invalid", "https://admin.example.invalid"],
-              "STUDENT_CORS_ORIGINS": ["https://student.example.invalid"],
-              "ADMIN_CORS_ORIGINS": ["https://admin.example.invalid"],
-              "TRUSTED_HOSTS": ["student.example.invalid", "admin.example.invalid"]}
+def test_production_rejects_unsafe_configuration(overrides, production_configuration):
+    values = production_configuration
+    assert Settings(_env_file=None, **values).ENVIRONMENT == "production"
     values.update(overrides)
     with pytest.raises(ValidationError):
         Settings(_env_file=None, **values)
@@ -189,14 +202,22 @@ async def test_cookie_origins_separate_admin_and_student_applications(mess_clien
     {"ADMIN_CORS_ORIGINS": ["https://other.example.invalid"]},
     {"STUDENT_CORS_ORIGINS": ["http://student.example.invalid"]},
 ])
-def test_production_rejects_unsafe_cookie_role_origins(changes):
-    values = {"ENVIRONMENT": "production", "DATABASE_URL": "postgresql+asyncpg://test@localhost/test",
-              "SECRET_KEY": "only-for-configuration-unit-tests-" + "x" * 32,
-              "CORS_ORIGINS": ["https://student.example.invalid", "https://admin.example.invalid"],
-              "STUDENT_CORS_ORIGINS": ["https://student.example.invalid"],
-              "ADMIN_CORS_ORIGINS": ["https://admin.example.invalid"],
-              "TRUSTED_HOSTS": ["student.example.invalid", "admin.example.invalid"]}
+def test_production_rejects_unsafe_cookie_role_origins(changes, production_configuration):
+    values = production_configuration
     assert Settings(_env_file=None, **values).ENVIRONMENT == "production"
     values.update(changes)
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError, match="cookie sessions|cookie origins|Role origins"):
         Settings(_env_file=None, **values)
+
+
+def test_production_demo_override_is_isolated_and_guard_remains(monkeypatch, production_configuration):
+    original_environment = os.environ.get("ENABLE_DEMO_DATA")
+    original_setting = settings.ENABLE_DEMO_DATA
+    with monkeypatch.context() as environment:
+        environment.setenv("ENABLE_DEMO_DATA", "true")
+        assert Settings(_env_file=None, **production_configuration).ENABLE_DEMO_DATA is False
+        with pytest.raises(ValidationError, match="Production cannot enable demo data"):
+            Settings(_env_file=None, **{**production_configuration, "ENABLE_DEMO_DATA": True})
+        assert os.environ["ENABLE_DEMO_DATA"] == "true"
+    assert os.environ.get("ENABLE_DEMO_DATA") == original_environment
+    assert settings.ENABLE_DEMO_DATA == original_setting
