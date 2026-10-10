@@ -132,3 +132,42 @@ async def test_ocr_sdk_network_timeout_is_actionable_and_does_not_leak(monkeypat
     with pytest.raises(HTTPException) as error: await ocr_router.extract_menu(png(),"image/png")
     assert error.value.status_code==504 and "sensitive" not in error.value.detail
     assert calls["closed"] is True
+
+
+@pytest.mark.parametrize("payload,reason,hint",[
+    ({"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Rejected request secret-source-token","details":[{"reason":"API_KEY_INVALID","metadata":{"api_key":"secret-source-token"}}]}},"invalid_api_key","invalid or expired"),
+    ({"error":{"code":400,"message":"API key not valid. Pass a valid API key secret-source-token"}},"invalid_api_key","invalid or expired"),
+    ({"error":{"code":400,"message":"This model is not available for new projects secret-source-token"}},"model_unavailable","free-tier model"),
+    ({"error":{"code":404,"message":"models/old-model is not found for API version v1beta secret-source-token"}},"model_unavailable","free-tier model"),
+    ({"error":{"code":400,"message":"Unsupported request field secret-source-token","details":[{"reason":"secret-source-token"}]}},"request_invalid","OCR_MODEL"),
+])
+async def test_ocr_precise_provider_reason_never_logs_raw_details(monkeypatch,caplog,payload,reason,hint):
+    code=payload["error"]["code"]
+    async def generate(**kwargs):
+        raise ocr_router.errors.APIError(code,payload)
+    calls=provider(monkeypatch,generate)
+    with pytest.raises(HTTPException) as response:
+        await ocr_router.extract_menu(png(),"image/png")
+    assert response.value.status_code==502 and hint in response.value.detail
+    assert "reason="+reason in caplog.text
+    for sensitive in ("secret-source-token","test-only-sensitive-key","metadata","old-model"):
+        assert sensitive not in caplog.text and sensitive not in response.value.detail
+    assert calls["closed"] is True
+
+
+@pytest.mark.parametrize("details",[None,[],"unexpected provider body",{"error":{"details":"malformed"}},{"error":{"details":[None,4,{"reason":[]}]}}])
+def test_ocr_reason_classifier_handles_malformed_provider_metadata(details):
+    error=ocr_router.errors.APIError(400,details)
+    assert ocr_router.provider_failure_reason(error)=="request_invalid"
+
+
+@pytest.mark.parametrize("code,reason,expected",[(403,"permissions",502),(429,"quota_or_unavailable",503),(503,"quota_or_unavailable",503)])
+async def test_ocr_transient_or_permissions_error_not_misclassified_as_model_config(monkeypatch,caplog,code,reason,expected):
+    async def generate(**kwargs):
+        raise ocr_router.errors.APIError(code,{"error":{"code":code,"message":"The model is unavailable secret-source-token"}})
+    provider(monkeypatch,generate)
+    with pytest.raises(HTTPException) as result:
+        await ocr_router.extract_menu(png(),"image/png")
+    assert result.value.status_code==expected and "reason="+reason in caplog.text
+    assert "secret-source-token" not in caplog.text and "secret-source-token" not in result.value.detail
+    if code in (429,503): assert result.value.headers=={"Retry-After":"60"}

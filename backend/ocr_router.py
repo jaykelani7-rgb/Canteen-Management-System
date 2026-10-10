@@ -69,6 +69,34 @@ def validate_image(image_bytes: bytes, content_type: str) -> str:
     except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as cause:
         raise HTTPException(400, "Upload a valid, non-animated JPEG, PNG or WebP image within the size and pixel limits.") from cause
 
+def provider_failure_reason(error: errors.APIError) -> str:
+    """Inspect known provider signals, but return only a fixed safe reason enum."""
+    payload = getattr(error, "details", None)
+    payload = payload if isinstance(payload, dict) else {}
+    nested = payload.get("error")
+    error_object = nested if isinstance(nested, dict) else payload
+    details = error_object.get("details", [])
+    details = details if isinstance(details, list) else []
+    reasons = {entry.get("reason") for entry in details[:32]
+        if isinstance(entry, dict) and isinstance(entry.get("reason"), str)}
+    message = getattr(error, "message", "")
+    message = message[:4096].casefold() if isinstance(message, str) else ""
+    if reasons & {"API_KEY_INVALID", "API_KEY_EXPIRED", "API_KEY_NOT_FOUND"} or any(
+        signal in message for signal in ("api key not valid", "api key is invalid", "api key expired", "api key has expired", "api key not found")):
+        return "invalid_api_key"
+    if error.code in (401, 403):
+        return "permissions"
+    if error.code in (429, 503):
+        return "quota_or_unavailable"
+    if reasons & {"MODEL_NOT_FOUND", "MODEL_NOT_SUPPORTED", "MODEL_ACCESS_DENIED"} or (
+        "model" in message and any(signal in message for signal in (
+            "not found", "not supported", "not available", "not allowed", "unavailable", "unsupported"))):
+        return "model_unavailable"
+    if error.code in (400, 404):
+        return "request_invalid"
+    return "upstream_error"
+
+
 async def extract_menu(image_bytes: bytes, mime_type: str) -> WeeklyMenu:
     api_key = str(getattr(settings, "GEMINI_API_KEY", "") or "").strip()
     if not api_key:
@@ -93,7 +121,13 @@ async def extract_menu(image_bytes: bytes, mime_type: str) -> WeeklyMenu:
         logger.warning("Menu extraction timed out")
         raise HTTPException(504, "Menu extraction timed out. Please try a clearer or smaller image.") from cause
     except errors.APIError as cause:
-        logger.warning("Menu extraction provider error (HTTP %s)", cause.code)
+        reason = provider_failure_reason(cause)
+        code = cause.code if isinstance(cause.code, int) and 100 <= cause.code <= 599 else 0
+        logger.warning("Menu extraction provider error (HTTP %s, reason=%s)", code, reason)
+        if reason == "invalid_api_key":
+            raise HTTPException(502, "The OCR provider rejected GEMINI_API_KEY as invalid or expired. Replace it privately in Render using a valid Google AI Studio key, then redeploy. Do not enter the key in this app.") from cause
+        if reason == "model_unavailable":
+            raise HTTPException(502, "The configured OCR_MODEL is unavailable for this Gemini project. Choose an accessible free-tier model in Render, then redeploy; do not enable paid billing.") from cause
         if cause.code in (401, 403):
             raise HTTPException(502, "The OCR provider rejected its credentials or permissions. Ask the operator to check GEMINI_API_KEY privately in Render.") from cause
         if cause.code in (429, 503):
