@@ -11,6 +11,7 @@ import type { UserProfile, AuthResponse, RegisterInput, StudentMenuItem, Student
 import { checkoutIntent, clearCheckoutIntent, completeGatewayPayment, completeWalletTopup, walletTopupIntent, clearWalletTopupIntent, CheckoutDismissed } from '../../src/lib/paymentCheckout'
 import './student.css'
 import FoodImage from '../../src/components/FoodImage'
+import FoodPhotoCredits from '../../src/components/FoodPhotoCredits'
 
 /* ============================================================================
    Smart Canteen OS — Student Mobile App
@@ -1083,7 +1084,7 @@ function HomeScreen() {
         <SearchBar />
       </div>
 
-      {menuLoading && <p role="status" className="px-5 pt-4 text-sm text-ink-soft">Loading your canteen…</p>}
+      {menuLoading && menu.length === 0 && <p role="status" className="px-5 pt-4 text-sm text-ink-soft">Loading your canteen…</p>}
       {menuError && <div role="alert" className="mx-5 mt-4 rounded-2xl bg-berry-soft p-4 text-sm text-berry">{menuError}<button className="ml-3 font-bold" onClick={() => { void refresh() }}>Retry</button></div>}
       {liveOrder && <button onClick={() => { selectOrder(liveOrder); go(liveOrder.status === 'Ready' ? 'ready' : 'tracking') }} className="mx-5 mt-4 flex w-[calc(100%-2.5rem)] items-center gap-3 rounded-3xl bg-ink p-4 text-left text-white">
         <div className="grid h-12 w-12 place-items-center rounded-2xl bg-tangerine text-xl">🍔</div>
@@ -1252,6 +1253,7 @@ function DetailsScreen() {
         </div>
 
         <p className="mt-4 text-sm leading-relaxed text-ink-soft">{item.desc}</p>
+        <FoodPhotoCredits url={item.photoCredits} />
 
         {item.available ? (
           <>
@@ -1354,9 +1356,7 @@ function EmptyState({
 
 function CartScreen() {
   const { cart, cartTotal, go } = useStore()
-  const packaging = cart.length ? 8 : 0
-  const gst = Number((cartTotal * 0.05).toFixed(2))
-  const total = Number((cartTotal + packaging + gst).toFixed(2))
+  const total = cartTotal
   return (
     <Screen>
       <TopBar title="Your Cart" subtitle={`${cart.length} item${cart.length !== 1 ? 's' : ''} · Main Block`} />
@@ -1380,8 +1380,6 @@ function CartScreen() {
             <h3 className="font-display text-sm font-bold">Bill details</h3>
             <div className="mt-3 flex flex-col gap-2 text-sm">
               <Row l="Item total" v={rupee(cartTotal)} />
-              <Row l="Packaging" v={rupee(packaging)} />
-              <Row l="GST (5%)" v={rupee(gst)} />
               <div className="my-1 border-t border-dashed border-line" />
               <Row l="To pay" v={rupee(total)} bold />
             </div>
@@ -1434,7 +1432,7 @@ function CheckoutScreen() {
     catch (e) { setFailed((e as Error).message); if ((e as { status?: number }).status === 0) setUnconfirmed(true) }
     finally { submitLock.current = false; setSubmitting(false) }
   }
-  const total = Number((cartTotal + 8 + cartTotal * 0.05).toFixed(2))
+  const total = cartTotal
   return (
     <Screen nav={false}>
       <TopBar title="Checkout" onBack={() => go('cart')} />
@@ -1512,7 +1510,6 @@ function CheckoutScreen() {
         <div className="mt-6 rounded-3xl bg-card p-5 shadow-sm">
           <div className="flex flex-col gap-2 text-sm">
             <Row l={`Items (${cart.length})`} v={rupee(cartTotal)} />
-            <Row l="Taxes & packaging" v={rupee(Number((8 + cartTotal * 0.05).toFixed(2)))} />
             <div className="my-1 border-t border-dashed border-line" />
             <Row l="To pay" v={rupee(total)} bold />
           </div>
@@ -1813,7 +1810,7 @@ function OrderDetailsScreen() {
           </div>
           <div className="mt-3 flex flex-col gap-2 text-sm">
             <Row l="Item total" v={rupee(o.itemTotal)} />
-            <Row l="Taxes & packaging" v={rupee(o.packagingFee + o.gst)} />
+            {o.packagingFee + o.gst > 0 && <Row l="Taxes & packaging" v={rupee(o.packagingFee + o.gst)} />}
             <Row l="Paid via" v={o.paymentMethod} />
             {o.refundStatus && <Row l="Refund status" v={o.refundStatus.replace(/_/g, ' ')} />}
             {o.cancellationReason && <p className="text-xs text-ink-soft">Cancellation: {o.cancellationReason}</p>}

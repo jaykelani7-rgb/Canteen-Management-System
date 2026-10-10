@@ -16,6 +16,7 @@ from auth import get_current_admin
 from database import cache_invalidate_prefix,get_db,get_redis_client
 from models import AdminUser,FoodItem,Order,OrderStatusEnum,StudentUser
 from schemas import FoodItemResponse
+from image_service import apply_catalogue_image
 
 IST=timezone(timedelta(hours=5,minutes=30))
 ACTIVE_STATES=("Queued","Preparing","Ready","Delayed")
@@ -40,6 +41,8 @@ class CatalogueInput(BaseModel):
     tag:str|None=Field(default=None,max_length=50)
     emoji:str|None=Field(default=None,max_length=10)
     photo:str|None=Field(default=None,max_length=500)
+    imageId:str|None=Field(default=None,pattern=r"^[a-f0-9]{32}$")
+    imageConfirmed:bool|None=None
     calories:int|None=Field(default=None,ge=0,le=10000)
     customizations:list[CatalogueCustomization]|None=Field(default=None,max_length=30)
     timingWindow:str|None=Field(default=None,max_length=50)
@@ -56,12 +59,15 @@ class CatalogueInput(BaseModel):
 class AvailabilityInput(BaseModel):
     model_config=ConfigDict(extra="forbid")
     available:bool
+    imageConfirmed:bool|None=None
 
 def catalogue_values(payload):
-    mapping={"available":"is_available","prepMins":"prep_mins","timingWindow":"timing_window"}
-    values={mapping.get(key,key):value for key,value in payload.model_dump(exclude_unset=True).items() if key!="id"}
+    if payload.photo:
+        raise HTTPException(422,"Select a managed photograph from the image library")
+    mapping={"available":"is_available","prepMins":"prep_mins","timingWindow":"timing_window","imageId":"image_id"}
+    values={mapping.get(key,key):value for key,value in payload.model_dump(exclude_unset=True).items() if key not in {"id","imageConfirmed","photo"}}
     for key,value in values.items():
-        if value is None and key not in {"desc","tag","photo"}:
+        if value is None and key not in {"desc","tag","image_id"}:
             raise HTTPException(422,"Catalogue fields cannot be null")
     if "customizations" in values:
         values["customizations"]=[{"name":option.name,"price":float(option.price)} for option in payload.customizations]
@@ -92,7 +98,9 @@ async def create_catalogue(payload:CatalogueInput,db:AsyncSession=Depends(get_db
     values=catalogue_values(payload)
     slug=re.sub(r"[^a-z0-9]+","-",unicodedata.normalize("NFKD",payload.name).encode("ascii","ignore").decode().lower()).strip("-")[:40] or "food"
     item_id=payload.id or slug+"-"+uuid.uuid4().hex[:8]
+    values.setdefault("is_available",False)
     row=FoodItem(id=item_id,**values)
+    await apply_catalogue_image(db,row,image_changed="image_id" in values,confirmed=payload.imageConfirmed)
     db.add(row)
     return await save_food(db,row)
 
@@ -100,13 +108,17 @@ async def create_catalogue(payload:CatalogueInput,db:AsyncSession=Depends(get_db
 async def update_catalogue(item_id:str,payload:CatalogueInput,db:AsyncSession=Depends(get_db),admin:AdminUser=Depends(get_current_admin)):
     if payload.id is not None and payload.id!=item_id: raise HTTPException(422,"Catalogue identifiers cannot change")
     row=await locked_food(db,item_id)
+    old_image,old_name=row.image_id,row.name
     for key,value in catalogue_values(payload).items(): setattr(row,key,value)
+    await apply_catalogue_image(db,row,image_changed=row.image_id!=old_image,name_changed=row.name!=old_name,confirmed=payload.imageConfirmed)
     return await save_food(db,row)
 
 @admin_operations_router.patch("/catalogue/{item_id}/availability",response_model=FoodItemResponse)
 async def update_availability(item_id:str,payload:AvailabilityInput,db:AsyncSession=Depends(get_db),admin:AdminUser=Depends(get_current_admin)):
     row=await locked_food(db,item_id)
     row.is_available=payload.available
+    if payload.available:
+        await apply_catalogue_image(db,row,confirmed=payload.imageConfirmed)
     return await save_food(db,row)
 
 @admin_operations_router.delete("/catalogue/{item_id}",response_model=FoodItemResponse)

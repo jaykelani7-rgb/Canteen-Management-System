@@ -15,6 +15,7 @@ from auth import (
     verify_password,
 )
 from config import settings
+from food_image_models import FoodImage
 from database import cache_get, cache_invalidate_prefix, cache_set, get_db
 from models import (
     DayOfWeek,
@@ -126,12 +127,15 @@ async def get_food_items(
     and customization options. Unavailable records remain in admin inventory and
     immutable order snapshots, never in this public catalogue.
     """
-    cache_key = f"canteen:food_items:public_available_v1:{category}:{veg}:{query}"
+    cache_key = f"canteen:food_items:public_photographed_v2:{category}:{veg}:{query}"
     cached = await cache_get(cache_key)
     if cached:
         return cached
 
-    stmt = select(FoodItem).where(FoodItem.is_available.is_(True))
+    stmt = select(FoodItem).join(FoodImage, FoodImage.id == FoodItem.image_id).where(
+        FoodItem.is_available.is_(True), FoodItem.image_confirmed.is_(True),
+        FoodImage.is_archived.is_(False), FoodImage.rights_confirmed.is_(True),
+        FoodImage.published_at.is_not(None))
     if category and category.lower() != "all":
         stmt = stmt.where(FoodItem.category.ilike(category.strip()))
     if veg is not None:
@@ -162,7 +166,10 @@ async def get_food_item_detail(
     db: AsyncSession = Depends(get_db),
 ):
     """Retrieves full information for a single food item including customization options."""
-    stmt = select(FoodItem).where(FoodItem.id == item_id, FoodItem.is_available.is_(True))
+    stmt = select(FoodItem).join(FoodImage, FoodImage.id == FoodItem.image_id).where(
+        FoodItem.id == item_id, FoodItem.is_available.is_(True), FoodItem.image_confirmed.is_(True),
+        FoodImage.is_archived.is_(False), FoodImage.rights_confirmed.is_(True),
+        FoodImage.published_at.is_not(None))
     res = await db.execute(stmt)
     item = res.scalar_one_or_none()
 

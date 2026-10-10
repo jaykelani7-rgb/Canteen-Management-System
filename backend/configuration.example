@@ -1,10 +1,51 @@
-# CORS only needs explicit frontend origins when calling FastAPI directly.
-# Same-origin /api proxy access works over LAN without additional origins.
-CORS_ORIGINS=["http://localhost:8443","http://127.0.0.1:8443","http://localhost:5173","http://127.0.0.1:5173"]
+# Copy to an ignored private environment file and replace every placeholder.
+ENVIRONMENT=development
+DATABASE_URL=postgresql+asyncpg://postgres:<existing-database-password>@127.0.0.1:5432/canteen_db
+REDIS_URL=redis://127.0.0.1:6379/0
+SECRET_KEY=<generate-a-fresh-random-signing-secret-of-at-least-32-bytes>
+# Compose requires the password matching the existing populated database.
+POSTGRES_PASSWORD=<existing-database-password>
+CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173","http://localhost:5174","http://127.0.0.1:5174","http://localhost:8443","http://127.0.0.1:8443"]
+STUDENT_CORS_ORIGINS=["http://localhost:5173","http://127.0.0.1:5173","http://localhost:5174","http://127.0.0.1:5174"]
+ADMIN_CORS_ORIGINS=["http://localhost:8443","http://127.0.0.1:8443"]
+TRUSTED_HOSTS=["localhost","127.0.0.1"]
+AUTO_CREATE_SCHEMA=false
+ENABLE_DEMO_DATA=false
+SESSION_COOKIE_MODE_ENABLED=true
+RATE_LIMIT_ENABLED=true
+PAYMENT_PROVIDER=disabled
+# Configure all three only when enabling a verified payment provider.
+# RAZORPAY_KEY_ID=<provider-key-id>
+# RAZORPAY_KEY_SECRET=<provider-key-secret>
+# RAZORPAY_WEBHOOK_SECRET=<webhook-signing-secret>
+PAYMENT_HTTP_TIMEOUT_SECONDS=10
+PAYMENT_ORDER_EXPIRY_MINUTES=15
+PACKAGING_FEE_PAISE=800
+ORDER_GST_BASIS_POINTS=500
+# Production:
+# ENVIRONMENT=production
+# DATABASE_URL uses the existing production postgres service hostname.
+# REDIS_URL uses redis service hostname.
+# CORS_ORIGINS=["https://student.example.edu","https://admin.example.edu"]
+# STUDENT_CORS_ORIGINS=["https://student.example.edu"]
+# ADMIN_CORS_ORIGINS=["https://admin.example.edu"]
+# Cookie role origins must be disjoint subsets of CORS_ORIGINS.
+# TRUSTED_HOSTS=["student.example.edu","admin.example.edu","127.0.0.1"]
 
-# Copy to backend/.env and replace placeholders locally. Never commit .env.
-DATABASE_URL=postgresql+asyncpg://postgres:<database-password>@127.0.0.1:5432/canteen_db
-POSTGRES_PASSWORD=<same-database-password>
-SECRET_KEY=<generate-a-random-signing-secret>
-DEFAULT_ADMIN_USERNAME=admin
-DEFAULT_ADMIN_PASSWORD=<choose-an-admin-password>
+# Passcode recovery stays unavailable until delivery and registered contacts are verified.
+PASSCODE_RECOVERY_ENABLED=false
+# SMTP_HOST=<configured-provider-host>
+# SMTP_PORT=587
+# SMTP_SECURITY=starttls
+# SMTP_USERNAME=<provider-account>
+# SMTP_PASSWORD=<private-provider-credential>
+# SMTP_FROM_EMAIL=<verified-sender-address>
+SMTP_TIMEOUT_SECONDS=10
+RECOVERY_CODE_TTL_SECONDS=300
+RECOVERY_MAX_ATTEMPTS=5
+RECOVERY_REQUEST_LIMIT=3
+RECOVERY_RESET_LIMIT=10
+RECOVERY_RATE_WINDOW_SECONDS=900
+RECOVERY_RESEND_COOLDOWN_SECONDS=60
+# SMTP_SECURITY=ssl uses implicit TLS (typically SMTP_PORT=465).
+# Both TLS modes verify the server certificate; plaintext SMTP is unsupported.

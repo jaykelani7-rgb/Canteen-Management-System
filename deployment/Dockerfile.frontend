@@ -1,0 +1,16 @@
+FROM node:22-slim AS build
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@10.34.3 --activate
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY . .
+ARG VITE_STUDENT_APP_URL
+# Both web origins proxy /api to one backend. Never embed private environment files.
+ENV VITE_AUTH_COOKIE_MODE=true VITE_API_BASE_URL="" VITE_STUDENT_APP_URL=$VITE_STUDENT_APP_URL
+RUN node -e "const u=new URL(process.env.VITE_STUDENT_APP_URL);if(u.protocol!=='https:'||u.username||u.password||u.pathname!=='/'||u.search||u.hash||u.hostname.split('.').some(p=>['example','invalid','test','localhost'].includes(p))||u.hostname.endsWith('trycloudflare.com')||['example.com','example.org','example.net'].includes(u.hostname))throw new Error('Set a real HTTPS Student origin')"
+RUN pnpm exec tsc --noEmit && pnpm run build && pnpm run test:separation
+
+FROM caddy:2.10-alpine
+COPY deployment/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/dist/student /srv/student
+COPY --from=build /app/dist/admin /srv/admin

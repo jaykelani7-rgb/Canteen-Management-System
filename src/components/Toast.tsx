@@ -16,7 +16,7 @@ export default function Toast({ toasts, onDismiss }: ToastProps) {
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 max-w-sm pointer-events-none">
+    <div aria-live="polite" aria-atomic="false" className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 max-w-sm pointer-events-none">
       {toasts.map((toast) => (
         <div
           key={toast.id}
@@ -56,6 +56,7 @@ export default function Toast({ toasts, onDismiss }: ToastProps) {
           </div>
           <button
             onClick={() => onDismiss(toast.id)}
+            aria-label="Dismiss notification"
             className="text-stone-400 hover:text-white text-xs p-1 rounded-lg transition-colors cursor-pointer"
           >
             ✕

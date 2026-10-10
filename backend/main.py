@@ -17,6 +17,7 @@ from mess_routes import mess_router
 from ocr_router import ocr_router
 from payment_routes import payment_router
 from admin_operations import admin_operations_router
+from image_router import image_router
 from observability import RequestLoggingMiddleware, log_event
 
 
@@ -87,6 +88,7 @@ app.include_router(admin_router, prefix=settings.API_V1_STR)
 app.include_router(ocr_router, prefix=settings.API_V1_STR)
 app.include_router(payment_router, prefix=settings.API_V1_STR)
 app.include_router(admin_operations_router, prefix=settings.API_V1_STR)
+app.include_router(image_router, prefix=settings.API_V1_STR)
 
 
 @app.get("/api/health", tags=["System"])

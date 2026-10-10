@@ -13,13 +13,16 @@ from models import FoodItem,StudentUser,Order,Notification,WalletTransaction
 from payment_models import PaymentIntent,PaymentEvent
 from payment_provider import provider
 from test_mess import mess_client
+from image_fixtures import attach_test_image
 
 async def prepare(fixture,balance=200):
     client,sessions,postgres=fixture
     async with sessions() as db:
         student=await db.get(StudentUser,"linked-student")
         student.wallet_balance=Decimal(str(balance))
-        db.add(FoodItem(id="financial-test-food",name="Financial Test Food",price=60,category="Snacks",is_available=True,timing_window="all_day",customizations=[{"name":"Extra cheese","price":10}]))
+        item=FoodItem(id="financial-test-food",name="Financial Test Food",price=60,category="Snacks",is_available=True,timing_window="all_day",customizations=[{"name":"Extra cheese","price":10}])
+        db.add(item)
+        await attach_test_image(db,item)
         await db.commit()
         token=create_access_token({"sub":student.id,"role":"student","credential_version":credential_fingerprint(student.hashed_passcode)})
     return {"Authorization":"Bearer "+token}
@@ -36,14 +39,15 @@ async def test_authoritative_prices_and_idempotency(mess_client):
     key=uuid.uuid4().hex
     first=await place(client,headers,key)
     assert first.status_code==201,first.text
-    assert first.json()["total"]==71
+    assert first.json()["total"]==60
+    assert first.json()["packagingFee"]==first.json()["gst"]==0
     assert first.json()["items"][0]["name"]=="Financial Test Food"
     again=await place(client,headers,key)
     assert again.json()["orderId"]==first.json()["orderId"]
     changed=payload();changed["items"][0]["qty"]=2
     assert (await place(client,headers,key,changed)).status_code==409
     async with sessions() as db:
-        assert (await db.get(StudentUser,"linked-student")).wallet_balance==Decimal("129.00")
+        assert (await db.get(StudentUser,"linked-student")).wallet_balance==Decimal("140.00")
         assert (await db.execute(select(func.count()).select_from(WalletTransaction))).scalar_one()==1
 
 async def test_validation_unavailable_and_no_fake_money(mess_client,monkeypatch):
@@ -93,7 +97,7 @@ async def test_ready_notifications_are_idempotent(mess_client):
 async def test_postgres_wallet_concurrency(mess_client,same_key):
     client,sessions,postgres=mess_client
     if not postgres:pytest.skip("True row-lock verification requires PostgreSQL")
-    headers=await prepare(mess_client,balance=71)
+    headers=await prepare(mess_client,balance=60)
     key=uuid.uuid4().hex
     results=await asyncio.gather(place(client,headers,key),place(client,headers,key if same_key else uuid.uuid4().hex))
     assert sorted(r.status_code for r in results)==([201,201] if same_key else [201,400])
@@ -117,7 +121,7 @@ async def gateway(mess_client,monkeypatch):
 async def test_verified_capture_and_duplicate_callbacks(mess_client,monkeypatch):
     client,sessions,_=mess_client;headers,order=await gateway(mess_client,monkeypatch)
     assert order["payment"]=="Pending" and order["status"]=="Payment Pending"
-    payment={"id":"pay_Test123","order_id":"order_Test123","amount":7100,"currency":"INR","status":"captured","captured":True}
+    payment={"id":"pay_Test123","order_id":"order_Test123","amount":6000,"currency":"INR","status":"captured","captured":True}
     async def fetch(_):return payment
     monkeypatch.setattr(provider,"fetch_payment",fetch)
     path=f'/api/student/orders/{order["orderId"]}/payment/verify'
@@ -126,7 +130,7 @@ async def test_verified_capture_and_duplicate_callbacks(mess_client,monkeypatch)
     assert (await client.post(path,headers=headers,json={**body,"razorpay_signature":"0"*64})).status_code==400
     payment["amount"]=7000
     assert (await client.post(path,headers=headers,json=body)).status_code==409
-    payment["amount"]=7100
+    payment["amount"]=6000
     for _ in range(2):
         result=await client.post(path,headers=headers,json=body)
         assert result.status_code==200,result.text
@@ -138,12 +142,12 @@ async def test_verified_capture_and_duplicate_callbacks(mess_client,monkeypatch)
     assert (await client.post("/api/payments/webhooks/razorpay",content=raw,headers=webhook_headers)).json()["duplicate"]
     async with sessions() as db:
         student=await db.get(StudentUser,"linked-student")
-        assert student.wallet_balance==Decimal("200.00") and student.total_orders==1 and student.total_spent==Decimal("71.00")
+        assert student.wallet_balance==Decimal("200.00") and student.total_orders==1 and student.total_spent==Decimal("60.00")
         assert (await db.execute(select(func.count()).select_from(PaymentEvent))).scalar_one()==1
 
 async def test_authorized_payment_is_not_paid(mess_client,monkeypatch):
     client,sessions,_=mess_client;headers,order=await gateway(mess_client,monkeypatch)
-    async def fetch(_):return {"id":"pay_Test123","order_id":"order_Test123","amount":7100,"currency":"INR","status":"authorized","captured":False}
+    async def fetch(_):return {"id":"pay_Test123","order_id":"order_Test123","amount":6000,"currency":"INR","status":"authorized","captured":False}
     monkeypatch.setattr(provider,"fetch_payment",fetch)
     signature=hmac.new(settings.RAZORPAY_KEY_SECRET.encode(),b"order_Test123|pay_Test123",hashlib.sha256).hexdigest()
     result=await client.post(f'/api/student/orders/{order["orderId"]}/payment/verify',headers=headers,json={"razorpay_order_id":"order_Test123","razorpay_payment_id":"pay_Test123","razorpay_signature":signature})

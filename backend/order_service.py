@@ -58,8 +58,17 @@ async def create_order(db, student_id, payload, idempotency_key):
     prep = 5
     for request in payload.items:
         item = by_id.get(request.id)
-        if not item or not item.is_available:
+        if not item or not item.is_available or not item.image_id or not item.image_confirmed:
             raise HTTPException(409, "An item is unavailable; refresh the menu")
+        from image_service import stored_image, image_url
+        try:
+            photograph = await stored_image(db, item.image_id)
+        except HTTPException as error:
+            if error.status_code == 404:
+                raise HTTPException(409, "An item photograph is unavailable; refresh the menu") from None
+            raise
+        if not photograph.rights_confirmed or photograph.published_at is None:
+            raise HTTPException(409, "An item photograph is unavailable; refresh the menu")
         from routes import is_time_in_window
         from zoneinfo import ZoneInfo
         if not is_time_in_window(datetime.now(ZoneInfo("Asia/Kolkata")).time(), item.timing_window):
@@ -70,9 +79,12 @@ async def create_order(db, student_id, payload, idempotency_key):
         price = money(item.price) + sum((options[o] for o in request.customizations), Decimal("0"))
         total += price * request.qty
         prep = max(prep, item.prep_mins)
-        formatted.append({"id": item.id, "name": item.name, "qty": request.qty, "price": float(price), "customizations": request.customizations, "photo": item.photo or ""})
-    fee = money(Decimal(settings.PACKAGING_FEE_PAISE) / 100)
-    tax = money(total * Decimal(settings.ORDER_GST_BASIS_POINTS) / 10000)
+        photo = image_url(item.image_id)
+        formatted.append({"id": item.id, "name": item.name, "qty": request.qty, "price": float(price), "customizations": request.customizations, "photo": photo, "photoCredits": photo + "/credits"})
+    # Current canteen checkout charges only the authoritative item subtotal.
+    # Existing orders retain their original recorded fees and tax amounts.
+    fee = money(0)
+    tax = money(0)
     payable = money(total + fee + tax)
     if payable <= 0 or payable >= Decimal("10000000000"):
         raise HTTPException(422, "Order total is unsupported")

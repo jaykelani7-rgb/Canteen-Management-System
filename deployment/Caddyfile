@@ -1,0 +1,67 @@
+{
+    email {$ACME_EMAIL}
+    admin localhost:2019
+}
+
+(security_headers) {
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        X-Frame-Options "DENY"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Content-Security-Policy "default-src 'self'; script-src 'self' https://checkout.razorpay.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://api.razorpay.com; frame-src https://api.razorpay.com https://checkout.razorpay.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+    }
+}
+
+(api_proxy) {
+    @api path /api /api/*
+    handle @api {
+        reverse_proxy api:8000
+    }
+}
+
+(static_cache) {
+    @immutable path /assets/*
+    header @immutable Cache-Control "public, max-age=31536000, immutable"
+    @shell path / /index.html /sw.js /manifest.webmanifest /offline.html /offline.js
+    header @shell Cache-Control "no-cache"
+}
+
+{$STUDENT_HOST} {
+    import security_headers
+    import api_proxy
+    import static_cache
+    handle {
+        root * /srv/student
+        try_files {path} /index.html
+        file_server
+    }
+}
+
+{$ADMIN_HOST} {
+    import security_headers
+    import api_proxy
+    import static_cache
+    handle {
+        root * /srv/admin
+        try_files {path} /index.html
+        file_server
+    }
+}
+
+# Stable HTTPS entry point used by the locally bundled Android Student frontend.
+{$API_HOST} {
+    import security_headers
+    import api_proxy
+    handle {
+        respond "Not found" 404
+    }
+}
+
+# Container-only liveness probe; this port is never published on the host.
+:8080 {
+    bind 127.0.0.1
+    respond /proxy-health "alive" 200
+    respond "Not found" 404
+}

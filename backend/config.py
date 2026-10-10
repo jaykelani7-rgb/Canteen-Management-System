@@ -56,8 +56,22 @@ class Settings(BaseSettings):
     RECOVERY_RATE_WINDOW_SECONDS: int = Field(default=900, ge=60, le=3600)
     RECOVERY_RESEND_COOLDOWN_SECONDS: int = Field(default=60, ge=30, le=300)
     PAYMENT_HTTP_TIMEOUT_SECONDS: int = Field(default=10, ge=1, le=60)
-    PACKAGING_FEE_PAISE: int = Field(default=800, ge=0, le=100000)
-    ORDER_GST_BASIS_POINTS: int = Field(default=500, ge=0, le=10000)
+    PACKAGING_FEE_PAISE: int = Field(default=0, ge=0, le=100000)
+    ORDER_GST_BASIS_POINTS: int = Field(default=0, ge=0, le=10000)
+    PUBLIC_API_ORIGIN: str = ""
+    FOOD_IMAGE_LIBRARY_MAX_BYTES: int = Field(default=67108864, ge=1048576, le=268435456)
+
+    @model_validator(mode="after")
+    def validate_public_api_origin(self):
+        if self.PUBLIC_API_ORIGIN:
+            origin = urlparse(self.PUBLIC_API_ORIGIN)
+            if (origin.scheme not in ("https", "http") or not origin.hostname
+                    or origin.username or origin.password or origin.path not in ("", "/")
+                    or origin.query or origin.fragment
+                    or (self.ENVIRONMENT == "production" and origin.scheme != "https")):
+                raise ValueError("Public API origin must be an explicit origin; production requires HTTPS")
+            self.PUBLIC_API_ORIGIN = self.PUBLIC_API_ORIGIN.rstrip("/")
+        return self
 
     @model_validator(mode="after")
     def validate_recovery(self):

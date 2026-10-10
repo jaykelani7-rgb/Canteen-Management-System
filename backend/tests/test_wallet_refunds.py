@@ -144,7 +144,7 @@ async def test_concurrent_topup_callbacks_and_reordered_webhooks_credit_once(mes
 async def test_topup_credit_races_wallet_spend_without_lost_balance(mess_client,gateway):
     client,sessions,postgres=mess_client
     if not postgres:pytest.skip('Real row locks require PostgreSQL')
-    headers,row,payment=await topup(mess_client,gateway,balance=71)
+    headers,row,payment=await topup(mess_client,gateway,balance=60)
     verified,order=await asyncio.gather(verify_topup(client,headers,row,payment),place(client,headers))
     assert verified.status_code==200 and order.status_code==201
     async with sessions() as db:
@@ -246,9 +246,9 @@ async def test_provider_topup_refund_recovers_available_balance_and_freezes_debt
     async with sessions() as db:
         student=await db.get(StudentUser,'linked-student');intent=await db.get(PaymentIntent,row['id'])
         assert student.wallet_balance==0 and student.is_active is (not spend)
-        assert intent.state=='refunded' and intent.unrecovered_refund_paise==(7100 if spend else 0)
+        assert intent.state=='refunded' and intent.unrecovered_refund_paise==(6000 if spend else 0)
         recovery=(await db.execute(select(WalletTransaction).where(WalletTransaction.payment_intent_id==row['id'],WalletTransaction.transaction_type=='debit'))).scalar_one()
-        assert recovery.amount==Decimal('29.50' if spend else '100.50')
+        assert recovery.amount==Decimal('40.50' if spend else '100.50')
 
 async def test_partial_provider_refund_freezes_for_operator_review(mess_client,gateway):
     client,sessions,_=mess_client;headers,row,payment=await topup(mess_client,gateway)

@@ -161,6 +161,8 @@ class FoodItem(Base):
     tag = Column(String(50), nullable=True)  # 'Bestseller', "Chef's pick", 'Student fav'
     emoji = Column(String(10), default="🍔", nullable=False)
     photo = Column(String(500), nullable=True)
+    image_id = Column(String(32), ForeignKey("food_images.id"), nullable=True, index=True)
+    image_confirmed = Column(Boolean, nullable=False, default=False, server_default=text("false"))
     calories = Column(Integer, default=300, nullable=False)
     customizations = Column(JSON, default=list)  # [{"name": "Extra cheese", "price": 15}]
     timing_window = Column(String(50), default="all_day", nullable=False)
@@ -190,6 +192,9 @@ class FoodItem(Base):
             "tag": self.tag,
             "emoji": self.emoji,
             "photo": self.photo or "",
+            "imageId": self.image_id,
+            "imageConfirmed": self.image_confirmed,
+            "photoCredits": self.photo + "/credits" if self.image_id and self.photo else None,
             "calories": self.calories,
             "customizations": self.customizations or [],
             "timingWindow": self.timing_window,
@@ -570,3 +575,6 @@ class NotificationRead(Base):
     notification_id = Column(Integer, ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False, index=True)
     read_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     __table_args__ = (UniqueConstraint("student_id", "notification_id", name="uq_notification_reads_student_notification"),)
+
+# Register image metadata alongside the existing shared SQLAlchemy models.
+from food_image_models import FoodImage  # noqa: E402,F401

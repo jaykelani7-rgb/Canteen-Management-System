@@ -1,0 +1,16 @@
+# Separate reviewed STAGING deployment; distinct DNS, secrets and volumes.
+# Staging and production share the SAME application/schema, never the same data.
+DEPLOYMENT_TIER=staging
+COMPOSE_PROJECT_NAME=canteen-staging
+CANTEEN_IMAGE_TAG=
+STUDENT_HOST=
+ADMIN_HOST=
+API_HOST=
+ACME_EMAIL=
+BACKEND_ENV_FILE=/secure/canteen/staging/backend.env
+MIGRATION_ENV_FILE=/secure/canteen/staging/migrations.env
+POSTGRES_USER=
+POSTGRES_DB=
+POSTGRES_PASSWORD=
+POSTGRES_VOLUME_NAME=
+REDIS_VOLUME_NAME=

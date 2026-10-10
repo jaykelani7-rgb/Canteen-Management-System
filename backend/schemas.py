@@ -132,6 +132,9 @@ class FoodItemResponse(BaseModel):
     tag: Optional[str] = None
     emoji: str
     photo: str
+    imageId: Optional[str] = None
+    imageConfirmed: bool = False
+    photoCredits: Optional[str] = None
     calories: int
     customizations: List[Dict[str, Any]] = []
     timingWindow: str

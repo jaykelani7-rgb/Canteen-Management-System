@@ -1,0 +1,128 @@
+# Reviewed VPS deployment. Run preflight before build/start; migrations are explicit.
+name: ${COMPOSE_PROJECT_NAME:?Select a separate canteen-staging or canteen-production project}
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-backend: &backend
+  image: canteen-api:${DEPLOYMENT_TIER:?Set staging or production}-${CANTEEN_IMAGE_TAG:?Set a unique reviewed release identifier}
+  build:
+    context: ..
+    dockerfile: backend/Dockerfile
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set the existing PostgreSQL administrator name}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set privately to the existing database password}
+      POSTGRES_DB: ${POSTGRES_DB:?Set the existing database name}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [private]
+    logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes: [redis_data:/data]
+    networks: [private]
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  migrate:
+    <<: *backend
+    profiles: [operations]
+    env_file: ${MIGRATION_ENV_FILE:?Set the separate private migration environment file}
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    environment:
+      ENVIRONMENT: production
+      AUTO_CREATE_SCHEMA: "false"
+      ENABLE_DEMO_DATA: "false"
+    networks: [private]
+    depends_on:
+      postgres: {condition: service_healthy}
+    logging: *logging
+    restart: "no"
+
+  api:
+    <<: *backend
+    env_file: ${BACKEND_ENV_FILE:?Set the private backend environment file}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      # Staging uses the SAME strict runtime checks, never development/demo mode.
+      ENVIRONMENT: production
+      AUTO_CREATE_SCHEMA: "false"
+      ENABLE_DEMO_DATA: "false"
+    networks: [private, egress]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    logging: *logging
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      retries: 3
+      start_period: 30s
+
+  web:
+    image: canteen-web:${DEPLOYMENT_TIER:?Set staging or production}-${CANTEEN_IMAGE_TAG:?Set a unique reviewed release identifier}
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile.frontend
+      args:
+        VITE_STUDENT_APP_URL: https://${STUDENT_HOST:?Set the real Student hostname}
+    environment:
+      STUDENT_HOST: ${STUDENT_HOST:?Set the real Student hostname}
+      ADMIN_HOST: ${ADMIN_HOST:?Set the real Admin hostname}
+      API_HOST: ${API_HOST:?Set the real stable API hostname}
+      ACME_EMAIL: ${ACME_EMAIL:?Set the operator certificate notification email}
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes: [caddy_data:/data, caddy_config:/config]
+    networks: [public, private]
+    depends_on:
+      api: {condition: service_healthy}
+    logging: *logging
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8080/proxy-health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+
+networks:
+  private: {internal: true}
+  public: {}
+  egress: {}
+
+volumes:
+  postgres_data:
+    external: true
+    name: ${POSTGRES_VOLUME_NAME:?Select the existing or explicitly provisioned PostgreSQL volume}
+  redis_data:
+    external: true
+    name: ${REDIS_VOLUME_NAME:?Select the explicitly provisioned Redis volume}
+  caddy_data: {}
+  caddy_config: {}

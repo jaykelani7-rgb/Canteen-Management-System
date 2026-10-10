@@ -1,0 +1,17 @@
+# Copy OUTSIDE the repository, fill privately, chmod 600; never paste into chat.
+# This intentionally cannot deploy until real values and approved resources exist.
+DEPLOYMENT_TIER=production
+COMPOSE_PROJECT_NAME=canteen-production
+# Unique build identifier; never reuse a tag for changed source (e.g. 20261009-r1).
+CANTEEN_IMAGE_TAG=
+STUDENT_HOST=
+ADMIN_HOST=
+API_HOST=
+ACME_EMAIL=
+BACKEND_ENV_FILE=/secure/canteen/production/backend.env
+MIGRATION_ENV_FILE=/secure/canteen/production/migrations.env
+POSTGRES_USER=
+POSTGRES_DB=
+POSTGRES_PASSWORD=
+POSTGRES_VOLUME_NAME=
+REDIS_VOLUME_NAME=

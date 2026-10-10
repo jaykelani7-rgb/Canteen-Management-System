@@ -1,0 +1,20 @@
+# Copy OUTSIDE Git to the BACKEND_ENV_FILE path. Values are deliberately blank.
+# Use the migration OWNER only in MIGRATION_ENV_FILE, not in the running API.
+ENVIRONMENT=production
+DATABASE_URL=
+REDIS_URL=redis://redis:6379/0
+SECRET_KEY=
+CORS_ORIGINS=
+STUDENT_CORS_ORIGINS=
+ADMIN_CORS_ORIGINS=
+TRUSTED_HOSTS=
+AUTO_CREATE_SCHEMA=false
+ENABLE_DEMO_DATA=false
+SESSION_COOKIE_MODE_ENABLED=true
+RATE_LIMIT_ENABLED=true
+PAYMENT_PROVIDER=disabled
+PASSCODE_RECOVERY_ENABLED=false
+DATABASE_POOL_SIZE=5
+DATABASE_MAX_OVERFLOW=5
+WEB_CONCURRENCY=2
+# Set optional SMTP/provider secrets privately ONLY after account verification.

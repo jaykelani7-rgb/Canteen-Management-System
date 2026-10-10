@@ -29,7 +29,7 @@ export default defineConfig(({ mode }) => {
     ...(native ? { define: { 'import.meta.env.VITE_API_BASE_URL': JSON.stringify(native.apiBaseUrl), 'import.meta.env.VITE_AUTH_COOKIE_MODE': JSON.stringify('false'), 'import.meta.env.VITE_NATIVE_APP': JSON.stringify('true'), 'import.meta.env.VITE_ANDROID_BACKEND_PLACEHOLDER': JSON.stringify(String(native.placeholder)) } } : {}),
     resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
     build: { outDir: path.resolve(__dirname, native ? native.outDir : 'dist/student'), emptyOutDir: true },
-    server: { host: '0.0.0.0', port: 5173, strictPort: true, proxy, https, fs: { allow: [__dirname] }, watch: { ignored: ['**/backend/**', '**/dist/**', '**/.figma/**'] } },
-    preview: { host: '0.0.0.0', port: 5173, strictPort: true, proxy, https },
+    server: { host: '0.0.0.0', port: 5173, strictPort: true, allowedHosts: true, proxy, https, fs: { allow: [__dirname] }, watch: { ignored: ['**/backend/**', '**/dist/**', '**/.figma/**'] } },
+    preview: { host: '0.0.0.0', port: 5173, strictPort: true, allowedHosts: true, proxy, https },
   }
 })

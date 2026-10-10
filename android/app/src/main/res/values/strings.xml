@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Canteen OS</string>
+    <string name="title_activity_main">Canteen OS</string>
+    <string name="package_name">com.canteenos.student</string>
+    <string name="custom_url_scheme">com.canteenos.student</string>
+</resources>
