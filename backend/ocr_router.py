@@ -1,8 +1,10 @@
 """Authenticated extraction for explicit administrator review; never autosaves a menu."""
 import asyncio
 import io
+import json
 import logging
 import httpx
+import re
 from typing import Literal
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from google import genai
@@ -81,13 +83,27 @@ def provider_failure_reason(error: errors.APIError) -> str:
         if isinstance(entry, dict) and isinstance(entry.get("reason"), str)}
     message = getattr(error, "message", "")
     message = message[:4096].casefold() if isinstance(message, str) else ""
-    if reasons & {"API_KEY_INVALID", "API_KEY_EXPIRED", "API_KEY_NOT_FOUND"} or any(
+    if reasons & {"API_KEY_REVOKED", "API_KEY_LEAKED"} or any(
+        signal in message for signal in ("reported as leaked", "api key was revoked", "api key has been revoked", "api key is revoked")):
+        return "compromised_api_key"
+    if reasons & {"API_KEY_INVALID", "API_KEY_NOT_VALID", "API_KEY_EXPIRED", "API_KEY_NOT_FOUND"} or any(
         signal in message for signal in ("api key not valid", "api key is invalid", "api key expired", "api key has expired", "api key not found")):
         return "invalid_api_key"
-    if error.code in (401, 403):
-        return "permissions"
     if error.code in (429, 503):
         return "quota_or_unavailable"
+    if reasons & {"SERVICE_DISABLED", "API_KEY_SERVICE_BLOCKED", "CONSUMER_INVALID"} or any(
+        signal in message for signal in ("api has not been used", "api is not enabled", "service is disabled", "requests to this api are blocked")):
+        return "project_access_restricted"
+    if reasons & {"BILLING_DISABLED", "BILLING_NOT_ENABLED"} or (
+        "billing" in message and any(signal in message for signal in ("not enabled", "disabled", "required", "enable billing"))):
+        return "free_tier_prerequisite"
+    if any(signal in message for signal in ("user location is not supported", "location is not supported", "free tier is not available")):
+        return "region_or_free_tier_unavailable"
+    if error.code == 400 and any(signal in message for signal in (
+        "response_schema", "responseschema", "response_json_schema", "responsejsonschema", "additionalproperties", "additional_properties")):
+        return "response_schema_rejected"
+    if error.code in (401, 403):
+        return "permissions"
     if reasons & {"MODEL_NOT_FOUND", "MODEL_NOT_SUPPORTED", "MODEL_ACCESS_DENIED"} or (
         "model" in message and any(signal in message for signal in (
             "not found", "not supported", "not available", "not allowed", "unavailable", "unsupported"))):
@@ -95,6 +111,41 @@ def provider_failure_reason(error: errors.APIError) -> str:
     if error.code in (400, 404):
         return "request_invalid"
     return "upstream_error"
+
+
+def sanitized_provider_error(error: errors.APIError, api_key: str) -> dict:
+    """Capture bounded provider diagnostics without request data or credentials."""
+    def clean(value):
+        if not isinstance(value, str):
+            return ""
+        if len(value) > 4096:
+            return "[oversized provider message omitted]"
+        if api_key:
+            value = value.replace(api_key, "[REDACTED]")
+        value = re.sub(r"AIza[A-Za-z0-9_-]*", "[REDACTED]", value)
+        value = re.sub(r"https?://\S+", "[URL redacted]", value)
+        value = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [REDACTED]", value)
+        value = re.sub(r"(?i)\b[\w-]*(?:secret|token|password|credential|sensitive)[\w-]+\b", "[REDACTED]", value)
+        value = re.sub(r"(?i)(?:api[_-]?key|authorization|password|secret)\s*[=:]\s*[^\s,;]+", "[REDACTED]", value)
+        value = re.sub(r"[A-Za-z0-9_+/=-]{48,}", "[data redacted]", value)
+        value = re.sub(r"[\w.+-]+@[\w.-]+", "[email redacted]", value)
+        value = re.sub(r"\b(?:projects|users)/[^\s/]+", "[identifier redacted]", value)
+        value = re.sub(r"\bmodels/[^\s,;]+", "models/[identifier redacted]", value)
+        return " ".join(value.split())[:1024]
+
+    payload = getattr(error, "details", None)
+    payload = payload if isinstance(payload, dict) else {}
+    nested = payload.get("error")
+    obj = nested if isinstance(nested, dict) else payload
+    details = obj.get("details", [])
+    details = details if isinstance(details, list) else []
+    reasons = sorted({entry.get("reason") for entry in details[:32]
+        if isinstance(entry, dict) and isinstance(entry.get("reason"), str)
+        and re.fullmatch(r"[A-Z_]{1,64}", entry["reason"])})
+    status = obj.get("status", "")
+    status = status if isinstance(status, str) and re.fullmatch(r"[A-Z_]{1,64}", status) else ""
+    return {"code": error.code if isinstance(error.code, int) else 0,
+        "status": status, "message": clean(getattr(error, "message", "")), "reasons": reasons}
 
 
 async def extract_menu(image_bytes: bytes, mime_type: str) -> WeeklyMenu:
@@ -123,7 +174,18 @@ async def extract_menu(image_bytes: bytes, mime_type: str) -> WeeklyMenu:
     except errors.APIError as cause:
         reason = provider_failure_reason(cause)
         code = cause.code if isinstance(cause.code, int) and 100 <= cause.code <= 599 else 0
-        logger.warning("Menu extraction provider error (HTTP %s, reason=%s)", code, reason)
+        logger.warning("Menu extraction provider error (HTTP %s, reason=%s, sanitized=%s)",
+            code, reason, json.dumps(sanitized_provider_error(cause, api_key), ensure_ascii=True))
+        if reason == "compromised_api_key":
+            raise HTTPException(502, "The OCR provider blocked GEMINI_API_KEY as leaked or revoked. Create a replacement in Google AI Studio and set it privately in Render, then redeploy. Do not enter the key in this app.") from cause
+        if reason == "project_access_restricted":
+            raise HTTPException(502, "The OCR provider rejected this project's API access or key restrictions. Review the Google AI Studio project and permitted Gemini API access privately; do not enable paid billing.") from cause
+        if reason == "free_tier_prerequisite":
+            raise HTTPException(502, "The OCR provider requires account or billing prerequisites that this free deployment does not meet. Choose a supported free-tier project and model; do not enable paid billing.") from cause
+        if reason == "region_or_free_tier_unavailable":
+            raise HTTPException(502, "The OCR provider does not support this server location or its free tier. Review supported regions and free-tier availability; do not enable paid billing.") from cause
+        if reason == "response_schema_rejected":
+            raise HTTPException(502, "The OCR provider rejected the menu response schema. The operator must update request compatibility before retrying; the weekly menu was not saved.") from cause
         if reason == "invalid_api_key":
             raise HTTPException(502, "The OCR provider rejected GEMINI_API_KEY as invalid or expired. Replace it privately in Render using a valid Google AI Studio key, then redeploy. Do not enter the key in this app.") from cause
         if reason == "model_unavailable":

@@ -171,3 +171,54 @@ async def test_ocr_transient_or_permissions_error_not_misclassified_as_model_con
     assert result.value.status_code==expected and "reason="+reason in caplog.text
     assert "secret-source-token" not in caplog.text and "secret-source-token" not in result.value.detail
     if code in (429,503): assert result.value.headers=={"Retry-After":"60"}
+
+
+@pytest.mark.parametrize("code,payload,reason,hint",[
+    (400,{"message":"Your API key was reported as leaked. Please use another API key. secret-source-token"},"compromised_api_key","leaked or revoked"),
+    (403,{"message":"API key has been revoked secret-source-token"},"compromised_api_key","leaked or revoked"),
+    (400,{"details":[{"reason":"API_KEY_NOT_VALID"}],"message":"Rejected secret-source-token"},"invalid_api_key","invalid or expired"),
+    (403,{"details":[{"reason":"API_KEY_SERVICE_BLOCKED"}],"message":"Rejected secret-source-token"},"project_access_restricted","API access"),
+    (400,{"details":[{"reason":"SERVICE_DISABLED"}],"message":"Rejected secret-source-token"},"project_access_restricted","API access"),
+    (400,{"details":[{"reason":"CONSUMER_INVALID"}],"message":"Rejected secret-source-token"},"project_access_restricted","API access"),
+    (400,{"details":[{"reason":"BILLING_DISABLED"}],"message":"Rejected secret-source-token"},"free_tier_prerequisite","do not enable paid billing"),
+    (400,{"message":"Gemini API free tier is not available in your country. Please enable billing secret-source-token"},"free_tier_prerequisite","do not enable paid billing"),
+    (400,{"message":"User location is not supported for the API use secret-source-token"},"region_or_free_tier_unavailable","server location"),
+    (400,{"message":"Invalid JSON payload received. Unknown name additionalProperties at generation_config.response_schema secret-source-token"},"response_schema_rejected","response schema"),
+    (400,{"message":"responseSchema cannot include an unsupported field secret-source-token"},"response_schema_rejected","response schema"),
+])
+async def test_ocr_provider_prerequisites_are_specific_and_never_leak(monkeypatch,caplog,code,payload,reason,hint):
+    async def generate(**kwargs):
+        raise ocr_router.errors.APIError(code,{"error":{"code":code,**payload}})
+    calls=provider(monkeypatch,generate)
+    with pytest.raises(HTTPException) as result:
+        await ocr_router.extract_menu(png(),"image/png")
+    assert result.value.status_code==502 and hint in result.value.detail
+    assert "reason="+reason in caplog.text
+    assert "secret-source-token" not in caplog.text and "test-only-sensitive-key" not in caplog.text
+    assert "secret-source-token" not in result.value.detail
+    assert calls["closed"] is True
+
+
+@pytest.mark.parametrize("code",[429,503])
+def test_ocr_quota_has_precedence_over_incidental_project_or_schema_phrases(code):
+    error=ocr_router.errors.APIError(code,{"error":{"code":code,"message":"Check billing or response_schema secret-source-token","details":[{"reason":"BILLING_DISABLED"}]}})
+    assert ocr_router.provider_failure_reason(error)=="quota_or_unavailable"
+
+
+def test_sanitized_provider_diagnostics_preserve_error_not_credentials():
+    key = "AIza" + "sensitive_key_" * 3
+    error = ocr_router.errors.APIError(400, {"error": {"code": 400, "status": "INVALID_ARGUMENT",
+        "message": "Unknown name additionalProperties at generation_config.response_schema. " + key + " secret-source-token https://provider.invalid/?key=hidden Bearer confidential-value",
+        "details": [{"reason": "API_KEY_SERVICE_BLOCKED", "metadata": {"key": key, "consumer": "private-project"}}]}})
+    result = ocr_router.sanitized_provider_error(error, key)
+    assert result["code"] == 400 and result["status"] == "INVALID_ARGUMENT"
+    assert result["reasons"] == ["API_KEY_SERVICE_BLOCKED"]
+    assert "additionalProperties" in result["message"]
+    for value in (key, "secret-source-token", "hidden", "confidential-value", "private-project"):
+        assert value not in str(result)
+    assert "metadata" not in result
+
+
+def test_sanitized_provider_diagnostics_omit_oversized_payload():
+    error = ocr_router.errors.APIError(400, {"error": {"code": 400, "message": "x" * 5000}})
+    assert ocr_router.sanitized_provider_error(error, "private-key")["message"] == "[oversized provider message omitted]"
