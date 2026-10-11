@@ -104,7 +104,7 @@ async def test_ocr_uses_explicit_configured_key_strict_schema_and_closes_client(
     assert calls["constructor"]["vertexai"] is False
     assert calls["constructor"]["http_options"].retry_options.attempts==1
     assert requests[0]["model"]=="gemini-2.5-flash"
-    assert requests[0]["config"].response_mime_type == "application/json"
+    assert requests[0]["config"].response_mime_type == "APPLICATION_JSON"
     assert requests[0]["config"].response_schema is ocr_router.WeeklyMenu
     assert calls["closed"] is True
 
