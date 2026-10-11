@@ -373,7 +373,7 @@ async def upload_weekly_menu(payload:WeeklyMenuBatchUpload,db:AsyncSession=Depen
         statement=insert(WeeklyMenu).values(values)
         await db.execute(statement.on_conflict_do_update(
             index_elements=["day","meal_type"],
-            set_={"items":statement.excluded.items,"updated_at":datetime.now(timezone.utc)}
+            set_={"items":statement.excluded["items"],"updated_at":datetime.now(timezone.utc)}
         ))
     await db.commit()
     await cache_invalidate_prefix("canteen:menu:")
