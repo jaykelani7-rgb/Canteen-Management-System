@@ -105,7 +105,7 @@ async def test_ocr_uses_explicit_configured_key_strict_schema_and_closes_client(
     assert calls["constructor"]["http_options"].retry_options.attempts==1
     assert requests[0]["model"]=="gemini-2.5-flash"
     assert requests[0]["config"].response_mime_type == "APPLICATION_JSON"
-    assert requests[0]["config"].response_schema is ocr_router.WeeklyMenu
+    assert requests[0]["config"].response_schema == ocr_router.provider_menu_schema()
     assert calls["closed"] is True
 
 @pytest.mark.parametrize("code,status,hint",[(401,502,"credentials"),(403,502,"permissions"),(429,503,"quota"),(503,503,"temporarily"),(400,502,"OCR_MODEL"),(404,502,"OCR_MODEL"),(500,502,"unavailable")])
