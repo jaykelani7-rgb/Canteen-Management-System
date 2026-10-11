@@ -364,9 +364,17 @@ async def upload_weekly_menu(payload:WeeklyMenuBatchUpload,db:AsyncSession=Depen
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
     insert=pg_insert if db.bind.dialect.name=="postgresql" else sqlite_insert
     entries={(item.day.value,item.meal_type.value):item for item in payload.schedule}
-    for key,item in sorted(entries.items()):
-        statement=insert(WeeklyMenu).values(day=key[0],meal_type=key[1],items=item.items)
-        await db.execute(statement.on_conflict_do_update(index_elements=["day","meal_type"],set_={"items":statement.excluded.items,"updated_at":datetime.now(timezone.utc)}))
+    if entries:
+        # Submit every reviewed meal slot in one database round trip. A weekly OCR
+        # schedule may contain up to 28 rows; serial upserts can outlive frontend
+        # request timeouts when the managed database is waking from inactivity.
+        values=[{"day":day,"meal_type":meal,"items":item.items}
+                for (day,meal),item in sorted(entries.items())]
+        statement=insert(WeeklyMenu).values(values)
+        await db.execute(statement.on_conflict_do_update(
+            index_elements=["day","meal_type"],
+            set_={"items":statement.excluded.items,"updated_at":datetime.now(timezone.utc)}
+        ))
     await db.commit()
     await cache_invalidate_prefix("canteen:menu:")
     return {"status":"success","message":"Weekly menu saved","schedule":[{"day":day,"meal_type":meal,"items":item.items} for (day,meal),item in entries.items()]}
