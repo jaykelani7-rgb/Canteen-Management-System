@@ -92,6 +92,19 @@ def provider(monkeypatch,generate,key="test-only-sensitive-key",timeout=30):
     monkeypatch.setattr(ocr_router,"settings",SimpleNamespace(GEMINI_API_KEY=key,OCR_MODEL="gemini-2.5-flash",OCR_TIMEOUT_SECONDS=timeout))
     return calls
 
+def test_provider_menu_schema_omits_unsupported_additional_properties():
+    import json
+    schema = ocr_router.provider_menu_schema()
+    payload = schema.model_dump(by_alias=True, exclude_none=True)
+    encoded = json.dumps(payload)
+    assert "additional_properties" not in encoded
+    assert "additionalProperties" not in encoded
+    assert payload["type"] == "OBJECT"
+    schedule = payload["properties"]["schedule"]
+    meal = schedule["items"]["properties"]
+    assert meal["day"]["enum"] == ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    assert meal["meal_type"]["enum"] == ["breakfast", "lunch", "snacks", "dinner"]
+
 async def test_ocr_uses_explicit_configured_key_strict_schema_and_closes_client(monkeypatch):
     requests=[]
     async def generate(**kwargs):
@@ -104,7 +117,7 @@ async def test_ocr_uses_explicit_configured_key_strict_schema_and_closes_client(
     assert calls["constructor"]["vertexai"] is False
     assert calls["constructor"]["http_options"].retry_options.attempts==1
     assert requests[0]["model"]=="gemini-2.5-flash"
-    assert requests[0]["config"].response_mime_type == "APPLICATION_JSON"
+    assert requests[0]["config"].response_mime_type == "application/json"
     assert requests[0]["config"].response_schema == ocr_router.provider_menu_schema()
     assert calls["closed"] is True
 
