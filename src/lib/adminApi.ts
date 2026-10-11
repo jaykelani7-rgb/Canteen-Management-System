@@ -36,9 +36,17 @@ export async function adminRequest<T>(path: string, method = 'GET', body?: unkno
         ...(token ? { Authorization: 'Bearer ' + token } : {}),
         ...(authenticating && usesAdminCookieSession ? { 'X-Session-Mode': 'cookie' } : {}) },
       body: body === undefined ? undefined : multipart ? body as FormData : JSON.stringify(body),
-      signal: AbortSignal.timeout(multipart ? 60000 : 20000),
+      signal: AbortSignal.timeout(multipart || path === '/menu/weekly' ? 60000 : 20000),
     })
-  } catch { throw new AdminApiError('Cannot reach the backend. Check your connection, then try again.', 0) }
+  } catch (cause) {
+    if (cause instanceof Error && cause.name === 'TimeoutError') {
+      const message = path === '/menu/weekly'
+        ? 'Saving the weekly menu timed out. Reload Weekly Schedule to confirm whether it saved before retrying.'
+        : 'The backend request timed out. Please try again.';
+      throw new AdminApiError(message, 408)
+    }
+    throw new AdminApiError('Cannot reach the backend. Check your connection, then try again.', 0)
+  }
   const data = await response.json().catch(() => null)
   if (!response.ok) {
     const message = typeof data?.detail === 'string' ? data.detail : Array.isArray(data?.detail)
