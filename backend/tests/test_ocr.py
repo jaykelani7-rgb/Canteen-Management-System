@@ -249,19 +249,19 @@ async def test_real_sdk_wire_schema_omits_rejected_field_and_preserves_image(mon
 
     async def transport(request):
         body = json.loads(request.content)
-        assert 'responseSchema' not in body['generationConfig']
-        assert 'responseJsonSchema' not in body['generationConfig']
-        schema = body['generationConfig']['responseFormat']['text']['schema']
+        config = body['generationConfig']
+        assert 'responseFormat' not in config
+        assert 'responseJsonSchema' not in config
+        schema = config['responseSchema']
         serialized = json.dumps(schema)
         assert 'additional_properties' not in serialized
-        assert schema['additionalProperties'] is False
-        assert body['generationConfig']['responseFormat']['text']['mimeType'] == 'application/json'
+        assert 'additionalProperties' not in serialized
+        assert config['responseMimeType'] == 'application/json'
+        assert schema['type'] == 'OBJECT'
         assert schema['required'] == ['schedule']
-        meal = schema['$defs']['MenuMeal']
-        assert schema['properties']['schedule']['items']['$ref'] == '#/$defs/MenuMeal'
-        assert meal['additionalProperties'] is False
+        meal = schema['properties']['schedule']['items']
         assert meal['required'] == ['day', 'meal_type', 'items']
-        assert 'Monday' in meal['properties']['day']['enum']
+        assert meal['properties']['day']['enum'] == ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
         assert set(meal['properties']['meal_type']['enum']) == {'breakfast', 'lunch', 'snacks', 'dinner'}
         part = body['contents'][0]['parts'][0]['inlineData']
         assert part.get('mimeType', part.get('mime_type')) == 'image/png'
