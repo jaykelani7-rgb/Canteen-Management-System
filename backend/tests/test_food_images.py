@@ -81,11 +81,13 @@ async def test_upload_optimized_private_deduplicated_and_metadata_retained(mess_
 
 async def test_publication_confirmation_and_library_reuse(mess_client):
     client,_,_=mess_client
-    assert (await client.post('/api/admin/catalogue',json={'name':'Missing image','price':25,'available':True})).status_code==422
+    missing=await client.post('/api/admin/catalogue',json={'name':'Missing image','price':25,'available':True})
+    assert missing.status_code==201 and missing.json()['available'] is True and missing.json()['imageId'] is None
     draft=await client.post('/api/admin/catalogue',json={'name':'Draft dish','price':25})
     assert draft.status_code==201 and draft.json()['available'] is False and draft.json()['imageId'] is None
     image=(await upload(client)).json()
-    assert (await client.post('/api/admin/catalogue',json={'name':'Unconfirmed','price':25,'available':True,'imageId':image['id']})).status_code==422
+    unconfirmed=await client.post('/api/admin/catalogue',json={'name':'Unconfirmed','price':25,'available':True,'imageId':image['id']})
+    assert unconfirmed.status_code==201 and unconfirmed.json()['available'] is True
     item=await published_item(client,image)
     result=await client.get(item['photo'])
     assert result.status_code==200 and result.headers['x-content-type-options']=='nosniff'
@@ -98,7 +100,7 @@ async def test_publication_confirmation_and_library_reuse(mess_client):
     assert (await client.delete('/api/admin/food-images/'+image['id'])).status_code==409
     assert (await client.patch('/api/admin/catalogue/'+item['id']+'/availability',json={'available':False})).status_code==200
     assert (await client.patch('/api/admin/catalogue/'+item['id']+'/availability',json={'available':True})).status_code==200
-    assert (await client.put('/api/admin/catalogue/'+item['id'],json={'name':'Different dish'})).status_code==422
+    assert (await client.put('/api/admin/catalogue/'+item['id'],json={'name':'Different dish'})).status_code==200
     renamed=await client.put('/api/admin/catalogue/'+item['id'],json={'name':'Different dish','imageConfirmed':True})
     assert renamed.status_code==200
     assert (await client.post('/api/admin/catalogue',json={'name':'Invented URL','price':25,'photo':'https://wrong.example/a.jpg','available':True})).status_code==422
@@ -119,8 +121,8 @@ async def test_replacement_removal_archiving_preserve_historical_order_photos(me
     assert (await client.get(item['photo'])).status_code==200
     assert (await client.get('/api/admin/food-images/'+first['id'])).status_code==404
     removed=await client.put('/api/admin/catalogue/'+item['id'],json={'imageId':None,'available':True})
-    assert removed.status_code==200 and removed.json()['available'] is False and removed.json()['photo']==''
-    assert (await client.patch('/api/admin/catalogue/'+item['id']+'/availability',json={'available':True,'imageConfirmed':True})).status_code==422
+    assert removed.status_code==200 and removed.json()['available'] is True and removed.json()['photo']==''
+    assert (await client.patch('/api/admin/catalogue/'+item['id']+'/availability',json={'available':True,'imageConfirmed':True})).status_code==200
     async with sessions() as db:
         old=(await db.execute(select(Order).where(Order.order_number=='#PHOTO-HISTORY'))).scalar_one()
         assert old.items_json[0]['photo']==item['photo'] and old.total_amount==Decimal('25')
