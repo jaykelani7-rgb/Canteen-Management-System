@@ -126,7 +126,6 @@ async def update_catalogue(item_id:str,payload:CatalogueInput,db:AsyncSession=De
     name_changed = row.name != old_name
     image_removed = "image_id" in updates and updates["image_id"] is None
     if image_removed:
-        row.is_available=False
         await apply_catalogue_image(db,row,image_changed=True,name_changed=name_changed,confirmed=False)
         return await save_food(db,row)
     if name_changed or not row.image_id:
