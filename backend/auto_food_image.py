@@ -86,19 +86,19 @@ def plain_metadata(value):
     try:
         parser.feed(value)
         parser.close()
-        return re.sub(r"\\s+", " ", html.unescape(" ".join(parser.parts))).strip()
+        return re.sub(r"\s+", " ", html.unescape(" ".join(parser.parts))).strip()
     except Exception:
-        return re.sub(r"\\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", value))).strip()
+        return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]*>", " ", value))).strip()
 
 
 def is_reusable_license(value):
     """Accept commercial reuse and adaptations; reject non-commercial/no-derivatives."""
-    name = re.sub(r"\\s+", " ", (value or "").strip()).upper()
+    name = re.sub(r"\s+", " ", (value or "").strip()).upper()
     if name.startswith(("CC0", "PUBLIC DOMAIN", "PDM")):
         return True
     if any(term in name for term in ("NONCOMMERCIAL", "NODERIV", "-NC", "-ND")):
         return False
-    return bool(re.match(r"^CC BY(?:-SA)?(?:\\s|$)", name))
+    return bool(re.match(r"^CC BY(?:-SA)?(?:\s|$)", name))
 
 
 def _words(value):
@@ -119,7 +119,7 @@ def _expanded_terms(dish_name):
 
 def _openverse_search_query(dish_name):
     """Build a generic query with spelling/ingredient alternatives, bounded to API limits."""
-    clean = re.sub(r"\\s+", " ", (dish_name or "").strip())[:100]
+    clean = re.sub(r"\s+", " ", (dish_name or "").strip())[:100]
     if not clean:
         return ""
     phrases = [f'"{clean}"', f'"{clean} food"', f'"{clean} Indian food"']
@@ -199,7 +199,7 @@ def _openverse_license_name(code, version):
     prefix = OPENVERSE_LICENSES[code]
     version = (version or "").strip()
     if code in {"by", "by-sa"}:
-        if not re.fullmatch(r"\\d+(?:\\.\\d+)?", version):
+        if not re.fullmatch(r"\d+(?:\.\d+)?", version):
             return ""
         return f"{prefix} {version}"
     return f"{prefix} {version}" if version else prefix
@@ -368,8 +368,8 @@ async def _find_openverse_photo(db, client, dish_name, admin_id):
         identifier = quote(str(item["id"]), safe="")
         # Download through Openverse's image proxy rather than contacting an arbitrary result URL.
         image_url = f"{OPENVERSE_API}/images/{identifier}/thumb/?full_size=true&compressed=true"
-        creator = re.sub(r"\\s+", " ", str(item.get("creator") or "Creator not listed")).strip()
-        provider = re.sub(r"\\s+", " ", str(item.get("provider") or item.get("source") or "Openverse source")).strip()
+        creator = re.sub(r"\s+", " ", str(item.get("creator") or "Creator not listed")).strip()
+        provider = re.sub(r"\s+", " ", str(item.get("provider") or item.get("source") or "Openverse source")).strip()
         landing = item["foreign_landing_url"]
         attribution = f"Creator: {creator}; provider: {provider}; source page: {landing}"
         result = await _persist_candidate(db, client, image_url, {"api.openverse.org"}, {
@@ -389,7 +389,7 @@ async def _find_openverse_photo(db, client, dish_name, admin_id):
 
 async def find_and_store_food_image(db: AsyncSession, dish_name: str, admin_id: int):
     """Search Wikimedia Commons then Openverse; persist validated image bytes in PostgreSQL."""
-    dish_name = re.sub(r"\\s+", " ", (dish_name or "").strip())[:100]
+    dish_name = re.sub(r"\s+", " ", (dish_name or "").strip())[:100]
     if len(dish_name) < 2 or settings.ENVIRONMENT == "test":
         return None
 
