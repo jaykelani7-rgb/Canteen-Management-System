@@ -188,3 +188,7 @@ async def apply_catalogue_image(db, item, *, image_changed=False, name_changed=F
     else:
         image = await stored_image(db, item.image_id, lock=True)
         item.photo = image_url(image.id)
+    # Photos are optional; if one is attached to an available dish, rights
+    # confirmation and publication checks still apply.
+    if item.is_available and item.image_id:
+        await require_publishable_image(db, item)
