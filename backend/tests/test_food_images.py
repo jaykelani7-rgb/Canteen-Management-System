@@ -87,7 +87,7 @@ async def test_publication_confirmation_and_library_reuse(mess_client):
     assert draft.status_code==201 and draft.json()['available'] is False and draft.json()['imageId'] is None
     image=(await upload(client)).json()
     unconfirmed=await client.post('/api/admin/catalogue',json={'name':'Unconfirmed','price':25,'available':True,'imageId':image['id']})
-    assert unconfirmed.status_code==201 and unconfirmed.json()['available'] is True
+    assert unconfirmed.status_code==422
     item=await published_item(client,image)
     result=await client.get(item['photo'])
     assert result.status_code==200 and result.headers['x-content-type-options']=='nosniff'
