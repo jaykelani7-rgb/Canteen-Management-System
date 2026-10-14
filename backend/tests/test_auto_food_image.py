@@ -52,15 +52,19 @@ async def test_dish_is_saved_with_automatic_photo_without_upload(mess_client, mo
         assert photo.dish_name == "Samosa" and photo.rights_confirmed and photo.byte_size > 0
 
 
-async def test_unmatched_available_dish_is_blocked_but_draft_can_save(mess_client, monkeypatch):
+async def test_unmatched_dish_can_be_saved_and_made_available_without_a_photo(mess_client, monkeypatch):
     client, _, _ = mess_client
     async def no_match(*args, **kwargs):
         return None
     monkeypatch.setattr(admin_operations, "find_and_store_food_image", no_match)
     response = await client.post("/api/admin/catalogue", json={"name": "No match", "price": 20, "available": True})
-    assert response.status_code == 422
-    draft = await client.post("/api/admin/catalogue", json={"name": "Draft item", "price": 20, "available": False})
-    assert draft.status_code == 201 and draft.json()["available"] is False and not draft.json()["imageId"]
+    assert response.status_code == 201, response.text
+    item = response.json()
+    assert item["available"] is True and not item["imageId"] and item["photo"] is None
+    toggle = await client.patch(f"/api/admin/catalogue/{item['id']}/availability", json={"available": False})
+    assert toggle.status_code == 200 and toggle.json()["available"] is False
+    toggle_on = await client.patch(f"/api/admin/catalogue/{item['id']}/availability", json={"available": True})
+    assert toggle_on.status_code == 200 and toggle_on.json()["available"] is True
 
 def test_openverse_license_mapping_only_allows_commercially_reusable_images():
     assert _openverse_license_name("by", "4.0") == "CC BY 4.0"
