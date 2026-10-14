@@ -1,12 +1,23 @@
 """Offline tests for automatic licensed food-photo matching and catalogue integration."""
+import pytest
 from sqlalchemy import select
 
+from config import settings
 from food_image_models import FoodImage
 from image_fixtures import attach_test_image
 from models import FoodItem
 from test_mess import mess_client
 import admin_operations
 from auto_food_image import is_reusable_license, _relevance
+
+
+@pytest.fixture(autouse=True)
+def test_config(monkeypatch):
+    monkeypatch.setattr(settings, "PUBLIC_API_ORIGIN", "http://test")
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", False)
+    async def no_cache(*args, **kwargs):
+        return None
+    monkeypatch.setattr(admin_operations, "cache_invalidate_prefix", no_cache)
 
 
 def test_only_commercial_reusable_licenses_are_accepted():
