@@ -60,7 +60,7 @@ async def test_unmatched_dish_can_be_saved_and_made_available_without_a_photo(me
     response = await client.post("/api/admin/catalogue", json={"name": "No match", "price": 20, "available": True})
     assert response.status_code == 201, response.text
     item = response.json()
-    assert item["available"] is True and not item["imageId"] and item["photo"] is None
+    assert item["available"] is True and not item["imageId"] and item["photo"] == ""
     toggle = await client.patch(f"/api/admin/catalogue/{item['id']}/availability", json={"available": False})
     assert toggle.status_code == 200 and toggle.json()["available"] is False
     toggle_on = await client.patch(f"/api/admin/catalogue/{item['id']}/availability", json={"available": True})
