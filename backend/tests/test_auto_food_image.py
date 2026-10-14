@@ -8,7 +8,10 @@ from image_fixtures import attach_test_image
 from models import FoodItem
 from test_mess import mess_client
 import admin_operations
-from auto_food_image import (\n    is_reusable_license, _relevance, _openverse_license_name,\n    _openverse_search_query, _openverse_relevance,\n)
+from auto_food_image import (
+    is_reusable_license, _relevance, _openverse_license_name,
+    _openverse_search_query, _openverse_relevance,
+)
 
 
 @pytest.fixture(autouse=True)
