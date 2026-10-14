@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { adminOperationsApi, type CatalogueItem } from '../lib/adminOperationsApi'
-import FoodImage from './FoodImage'
 
 export interface AlaCarteItem {
   id: string
@@ -68,7 +67,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
       void mutate(async () => {
         const updated = await adminOperationsApi.updateItem(id, { name: item.item_name, available: true })
         setItems(prev => prev.map(row => row.id === id ? toInventoryItem(updated) : row))
-        onShowToast?.('Item is Now Available', updated.name + ' and its automatically matched photo are saved.', 'success')
+        onShowToast?.('Item is Now Available', updated.name + ' is now available to students.', 'success')
       })
       return
     }
@@ -120,10 +119,8 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
       setIsModalOpen(false)
       onShowToast?.(
         editingItem ? 'Item Updated' : 'New Item Added',
-        saved.name + (saved.imageId
-          ? ' saved. Its food photograph is stored in the canteen image library.'
-          : ' saved as a draft because no suitable licensed photo was found. Refine the dish name and save again to retry.'),
-        saved.imageId ? 'success' : 'warning'
+        saved.name + ' saved successfully and synchronized with the catalogue.',
+        'success'
       )
     })
   }
@@ -292,10 +289,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
                     >
                       {/* Dish Details */}
                       <td className="py-5 px-6">
-                        <div className="flex items-center gap-3.5">
-                          <div className="w-11 h-11 overflow-hidden rounded-2xl bg-stone-100 border border-[#E5DFD7] flex items-center justify-center text-2xl shrink-0 shadow-2xs">
-                            <FoodImage src={item.source.photo} alt={item.item_name} className="h-full w-full" />
-                          </div>
+                        <div className="min-w-0 max-w-sm">
                           <div>
                             <div className="flex items-center gap-2">
                               <span
@@ -495,10 +489,6 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
                 />
               </div>
 
-              <p className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-xs text-emerald-800">
-                A high-quality, freely licensed food photograph is matched automatically and stored in the canteen image library. No upload is needed.
-              </p>
-
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-stone-600 mb-1.5">
@@ -573,7 +563,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
               <div className="flex items-center justify-between p-4 rounded-2xl bg-[#FAF7F3] border border-[#E5DFD7]">
                 <div>
                   <p className="text-xs font-bold text-[#1D1A16]">Available to Students</p>
-                  <p className="text-[11px] text-stone-500">A freely licensed food photograph is matched automatically when saved.</p>
+                  <p className="text-[11px] text-stone-500">Students can order this item whenever it is marked available.</p>
                 </div>
                 <button
                   type="button"
