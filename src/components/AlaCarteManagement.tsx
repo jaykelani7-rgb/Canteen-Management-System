@@ -63,14 +63,6 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
   const handleToggleAvailability = (id: string) => {
     const item = items.find(row => row.id === id)
     if (!item) return
-    if (!item.is_available && !item.source.imageId) {
-      void mutate(async () => {
-        const updated = await adminOperationsApi.updateItem(id, { name: item.item_name, available: true })
-        setItems(prev => prev.map(row => row.id === id ? toInventoryItem(updated) : row))
-        onShowToast?.('Item is Now Available', updated.name + ' is now available to students.', 'success')
-      })
-      return
-    }
     void mutate(async () => {
       const updated = await adminOperationsApi.availability(id, !item.is_available)
       setItems(prev => prev.map(row => row.id === id ? toInventoryItem(updated) : row))
