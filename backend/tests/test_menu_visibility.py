@@ -84,7 +84,7 @@ async def test_available_menu_uses_new_cache_namespace(mess_client, monkeypatch)
     monkeypatch.setattr(student_routes, "cache_set", cache_write)
     response = await client.get("/api/menu/items?available_only=false")
     assert response.status_code == 200
-    assert keys and all(key.startswith("canteen:food_items:public_photographed_v2:") for key in keys)
+    assert keys and all(key.startswith("canteen:food_items:public_menu_v3:") for key in keys)
 
 
 @pytest.mark.parametrize("item_id", ["disabled-test-item", "missing-item"])
