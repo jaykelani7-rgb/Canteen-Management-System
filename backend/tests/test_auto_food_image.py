@@ -1,0 +1,49 @@
+"""Offline tests for automatic licensed food-photo matching and catalogue integration."""
+from sqlalchemy import select
+
+from food_image_models import FoodImage
+from image_fixtures import attach_test_image
+from models import FoodItem
+from test_mess import mess_client
+import admin_operations
+from auto_food_image import is_reusable_license, _relevance
+
+
+def test_only_commercial_reusable_licenses_are_accepted():
+    for value in ("CC BY 4.0", "CC BY-SA 4.0", "CC0 1.0", "Public domain", "PDM 1.0"):
+        assert is_reusable_license(value)
+    for value in ("CC BY-NC 4.0", "CC BY-NC-SA 4.0", "CC BY-ND 4.0", "CC BY-NC-ND 4.0", "Unknown"):
+        assert not is_reusable_license(value)
+
+
+def test_search_results_need_matching_dish_terms():
+    assert _relevance("Paneer Tikka Roll", "Paneer tikka roll.jpg", {}) == 3
+    assert _relevance("Paneer Tikka Roll", "A bowl of pasta.jpg", {}) == 0
+
+
+async def test_dish_is_saved_with_automatic_photo_without_upload(mess_client, monkeypatch):
+    client, sessions, _ = mess_client
+    async def fake_match(db, dish_name, admin_id):
+        return await attach_test_image(db, FoodItem(name=dish_name), admin_id=admin_id)
+    monkeypatch.setattr(admin_operations, "find_and_store_food_image", fake_match)
+    response = await client.post("/api/admin/catalogue", json={
+        "name": "Samosa", "price": 25, "category": "Snacks", "available": True, "timingWindow": "all_day",
+    })
+    assert response.status_code == 201, response.text
+    item = response.json()
+    assert item["available"] is True and item["imageId"] and item["imageConfirmed"] is True
+    assert item["photo"].startswith("http://test/api/food-images/")
+    async with sessions() as db:
+        photo = (await db.execute(select(FoodImage).where(FoodImage.id == item["imageId"]))).scalar_one()
+        assert photo.dish_name == "Samosa" and photo.rights_confirmed and photo.byte_size > 0
+
+
+async def test_unmatched_available_dish_is_blocked_but_draft_can_save(mess_client, monkeypatch):
+    client, _, _ = mess_client
+    async def no_match(*args, **kwargs):
+        return None
+    monkeypatch.setattr(admin_operations, "find_and_store_food_image", no_match)
+    response = await client.post("/api/admin/catalogue", json={"name": "No match", "price": 20, "available": True})
+    assert response.status_code == 422
+    draft = await client.post("/api/admin/catalogue", json={"name": "Draft item", "price": 20, "available": False})
+    assert draft.status_code == 201 and draft.json()["available"] is False and not draft.json()["imageId"]

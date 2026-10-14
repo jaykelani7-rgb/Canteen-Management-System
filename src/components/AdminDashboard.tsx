@@ -75,7 +75,7 @@ export default function AdminDashboard({
       case 'weekly-schedule':
         return {
           title: 'Active Weekly Schedule',
-          subtitle: 'Current rotating mess menu schedule for Breakfast, Lunch, Snacks & Dinner',
+          subtitle: 'Current rotating mess menu schedule for Lunch & Dinner',
         }
       case 'live-orders':
         return {

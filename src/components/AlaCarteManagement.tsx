@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { adminOperationsApi, type CatalogueItem } from '../lib/adminOperationsApi'
 import FoodImage from './FoodImage'
-import AdminFoodImagePicker from './AdminFoodImagePicker'
 
 export interface AlaCarteItem {
   id: string
@@ -39,10 +38,6 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
   const [busy, setBusy] = useState(false)
   const mutationLock = useRef(false)
   const [formDescription, setFormDescription] = useState('')
-  const [formImageId, setFormImageId] = useState<string | null>(null)
-  const [formImageConfirmed, setFormImageConfirmed] = useState(false)
-  const [imageBusy, setImageBusy] = useState(false)
-  const [imagePending, setImagePending] = useState(false)
   const [formPrep, setFormPrep] = useState('10')
   useEffect(() => {
     let active = true
@@ -69,8 +64,14 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
   const handleToggleAvailability = (id: string) => {
     const item = items.find(row => row.id === id)
     if (!item) return
-    if (!item.is_available && !item.source.imageId) { onShowToast?.('Photograph required', 'Edit this dish and upload or select its photograph before making it available.', 'warning'); return }
-    if (!item.is_available && !item.source.imageConfirmed) { onShowToast?.('Confirm the photograph', 'Open Edit, review the photograph and confirm it matches this dish before publishing.', 'warning'); return }
+    if (!item.is_available && !item.source.imageId) {
+      void mutate(async () => {
+        const updated = await adminOperationsApi.updateItem(id, { name: item.item_name, available: true })
+        setItems(prev => prev.map(row => row.id === id ? toInventoryItem(updated) : row))
+        onShowToast?.('Item is Now Available', updated.name + ' and its automatically matched photo are saved.', 'success')
+      })
+      return
+    }
     void mutate(async () => {
       const updated = await adminOperationsApi.availability(id, !item.is_available)
       setItems(prev => prev.map(row => row.id === id ? toInventoryItem(updated) : row))
@@ -80,7 +81,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
 
   const handleOpenAddModal = () => {
     if (loading || busy) return
-    setError(''); setFormDescription(''); setFormImageId(null); setFormImageConfirmed(false); setImageBusy(false); setImagePending(false); setFormPrep('10')
+    setError(''); setFormDescription(''); setFormPrep('10')
     setEditingItem(null)
     setFormName('')
     setFormCategory('Snacks')
@@ -93,7 +94,7 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
 
   const handleOpenEditModal = (item: AlaCarteItem) => {
     if (busy) return
-    setError(''); setFormDescription(item.source.desc); setFormImageId(item.source.imageId || null); setFormImageConfirmed(Boolean(item.source.imageConfirmed)); setImageBusy(false); setImagePending(false); setFormPrep(String(item.prep_time_mins))
+    setError(''); setFormDescription(item.source.desc); setFormPrep(String(item.prep_time_mins))
     setEditingItem(item)
     setFormName(item.item_name)
     setFormCategory(item.category)
@@ -106,20 +107,24 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
 
   const handleSaveItem = (e: React.FormEvent) => {
     e.preventDefault()
-    if (imageBusy || imagePending) { setError('Upload or discard the selected photograph before saving.'); return }
     if (!formName.trim()) return
     const price = Number(formPrice), prepMins = Number(formPrep)
     if (!Number.isFinite(price) || price <= 0 || !Number.isInteger(prepMins) || prepMins < 1) { setError('Enter a positive price and preparation time.'); return }
-    if (formAvailable && (!formImageId || !formImageConfirmed)) { setError('Select a photograph and confirm it shows this dish before making it available.'); return }
     void mutate(async () => {
       const payload = { name: formName.trim(), desc: formDescription.trim(), category: formCategory, price,
         timingWindow: formTiming, veg: formVeg, available: formAvailable, prepMins,
         emoji: editingItem?.source.emoji || (formCategory === 'Beverages' ? '🥤' : formCategory === 'Desserts' ? '🧁' : '🍽️'),
-        imageId: formImageId, imageConfirmed: formImageConfirmed, customizations: editingItem?.source.customizations || [] }
+        customizations: editingItem?.source.customizations || [] }
       const saved = editingItem ? await adminOperationsApi.updateItem(editingItem.id, payload) : await adminOperationsApi.createItem(payload)
       setItems(prev => editingItem ? prev.map(row => row.id === saved.id ? toInventoryItem(saved) : row) : [toInventoryItem(saved), ...prev])
       setIsModalOpen(false)
-      onShowToast?.(editingItem ? 'Item Updated' : 'New Item Added', saved.name + ' saved to the student catalogue.', 'success')
+      onShowToast?.(
+        editingItem ? 'Item Updated' : 'New Item Added',
+        saved.name + (saved.imageId
+          ? ' saved. Its food photograph is stored in the canteen image library.'
+          : ' saved as a draft because no suitable licensed photo was found. Refine the dish name and save again to retry.'),
+        saved.imageId ? 'success' : 'warning'
+      )
     })
   }
   const handleDeleteItem = (id: string, name: string) => {
@@ -461,8 +466,8 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
                 </p>
               </div>
               <button
-                onClick={() => { if (!busy && !imageBusy) setIsModalOpen(false) }}
-                disabled={busy || imageBusy}
+                onClick={() => { if (!busy) setIsModalOpen(false) }}
+                disabled={busy}
                 className="w-8 h-8 rounded-full bg-stone-100 hover:bg-stone-200 text-stone-600 flex items-center justify-center text-xs font-bold cursor-pointer"
               >
                 ✕
@@ -485,15 +490,14 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
                   required
                   placeholder="e.g. Paneer Tikka Roll"
                   value={formName}
-                  onChange={(e) => { setFormName(e.target.value); setFormImageConfirmed(false); setFormAvailable(false) }}
+                  onChange={(e) => setFormName(e.target.value)}
                   className="w-full px-4 py-2.5 rounded-xl bg-[#FAF7F3] border border-[#E5DFD7] focus:border-[#F25C2C] focus:bg-white text-xs font-semibold text-[#1D1A16] outline-none transition-all"
                 />
               </div>
 
-              <AdminFoodImagePicker dishName={formName} imageId={formImageId} confirmed={formImageConfirmed} disabled={busy || imageBusy}
-                onImageChange={id => { setFormImageId(id); setFormImageConfirmed(false); setFormAvailable(false) }}
-                onConfirmedChange={value => { setFormImageConfirmed(value); if (!value) setFormAvailable(false) }}
-                onBusyChange={setImageBusy} onPendingChange={setImagePending} />
+              <p className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-xs text-emerald-800">
+                A high-quality, freely licensed food photograph is matched automatically and stored in the canteen image library. No upload is needed.
+              </p>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -569,11 +573,11 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
               <div className="flex items-center justify-between p-4 rounded-2xl bg-[#FAF7F3] border border-[#E5DFD7]">
                 <div>
                   <p className="text-xs font-bold text-[#1D1A16]">Available to Students</p>
-                  <p className="text-[11px] text-stone-500">Requires a confirmed photograph; otherwise saved as a draft</p>
+                  <p className="text-[11px] text-stone-500">A freely licensed food photograph is matched automatically when saved.</p>
                 </div>
                 <button
                   type="button"
-                  disabled={busy || imageBusy || imagePending || !formImageId || !formImageConfirmed}
+                  disabled={busy}
                   onClick={() => setFormAvailable(!formAvailable)}
                   className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full p-0.5 transition-colors duration-200 ${
                     formAvailable ? 'bg-[#F25C2C]' : 'bg-stone-300'
@@ -590,14 +594,14 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#E5DFD7]">
                 <button
                   type="button"
-                  onClick={() => { if (!busy && !imageBusy) setIsModalOpen(false) }}
-                  disabled={busy || imageBusy}
+                  onClick={() => { if (!busy) setIsModalOpen(false) }}
+                  disabled={busy}
                   className="px-5 py-2.5 rounded-full bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-bold transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
-                  type="submit" disabled={busy || imageBusy || imagePending}
+                  type="submit" disabled={busy}
                   className="px-6 py-2.5 rounded-full bg-[#F25C2C] hover:bg-[#d84e20] text-white text-xs font-bold transition-all shadow-md shadow-[#F25C2C]/25 cursor-pointer"
                 >
                   {busy ? 'Saving…' : editingItem ? 'Update Dish' : 'Save Dish'}

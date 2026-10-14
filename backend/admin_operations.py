@@ -17,6 +17,7 @@ from database import cache_invalidate_prefix,get_db,get_redis_client
 from models import AdminUser,FoodItem,Order,OrderStatusEnum,StudentUser
 from schemas import FoodItemResponse
 from image_service import apply_catalogue_image
+from auto_food_image import find_and_store_food_image
 from config import settings
 
 IST=timezone(timedelta(hours=5,minutes=30))
@@ -101,7 +102,17 @@ async def create_catalogue(payload:CatalogueInput,db:AsyncSession=Depends(get_db
     item_id=payload.id or slug+"-"+uuid.uuid4().hex[:8]
     values.setdefault("is_available",False)
     row=FoodItem(id=item_id,**values)
-    await apply_catalogue_image(db,row,image_changed="image_id" in values,confirmed=payload.imageConfirmed)
+    if not row.image_id:
+        image = await find_and_store_food_image(db, payload.name, admin.id)
+        if image:
+            row.image_id = image.id
+            await apply_catalogue_image(db, row, image_changed=True, confirmed=True)
+        elif row.is_available:
+            raise HTTPException(422, "No suitable freely licensed food photo was found. Try a more specific dish name and save again.")
+        else:
+            await apply_catalogue_image(db, row, image_changed=True, confirmed=False)
+    else:
+        await apply_catalogue_image(db,row,image_changed="image_id" in values,confirmed=payload.imageConfirmed)
     db.add(row)
     return await save_food(db,row)
 
@@ -111,7 +122,19 @@ async def update_catalogue(item_id:str,payload:CatalogueInput,db:AsyncSession=De
     row=await locked_food(db,item_id)
     old_image,old_name=row.image_id,row.name
     for key,value in catalogue_values(payload).items(): setattr(row,key,value)
-    await apply_catalogue_image(db,row,image_changed=row.image_id!=old_image,name_changed=row.name!=old_name,confirmed=payload.imageConfirmed)
+    name_changed = row.name != old_name
+    if name_changed or not row.image_id:
+        image = await find_and_store_food_image(db, row.name, admin.id)
+        if image:
+            row.image_id = image.id
+            await apply_catalogue_image(db, row, image_changed=row.image_id != old_image, name_changed=name_changed, confirmed=True)
+        elif row.is_available:
+            raise HTTPException(422, "No suitable freely licensed food photo was found. Try a more specific dish name and save again.")
+        else:
+            row.image_id = None
+            await apply_catalogue_image(db, row, image_changed=row.image_id != old_image, name_changed=name_changed, confirmed=False)
+    else:
+        await apply_catalogue_image(db,row,image_changed=row.image_id!=old_image,name_changed=name_changed,confirmed=payload.imageConfirmed)
     return await save_food(db,row)
 
 @admin_operations_router.patch("/catalogue/{item_id}/availability",response_model=FoodItemResponse)
