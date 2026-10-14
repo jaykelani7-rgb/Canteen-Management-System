@@ -8,7 +8,7 @@ from image_fixtures import attach_test_image
 from models import FoodItem
 from test_mess import mess_client
 import admin_operations
-from auto_food_image import is_reusable_license, _relevance
+from auto_food_image import (\n    is_reusable_license, _relevance, _openverse_license_name,\n    _openverse_search_query, _openverse_relevance,\n)
 
 
 @pytest.fixture(autouse=True)
@@ -58,3 +58,42 @@ async def test_unmatched_available_dish_is_blocked_but_draft_can_save(mess_clien
     assert response.status_code == 422
     draft = await client.post("/api/admin/catalogue", json={"name": "Draft item", "price": 20, "available": False})
     assert draft.status_code == 201 and draft.json()["available"] is False and not draft.json()["imageId"]
+
+def test_openverse_license_mapping_only_allows_commercially_reusable_images():
+    assert _openverse_license_name("by", "4.0") == "CC BY 4.0"
+    assert _openverse_license_name("by-sa", "4.0") == "CC BY-SA 4.0"
+    assert _openverse_license_name("cc0", "1.0") == "CC0 1.0"
+    assert _openverse_license_name("pdm", "1.0") == "Public Domain Mark 1.0"
+    for code in ("by-nc", "by-nc-sa", "by-nd", "by-nc-nd", "unknown", ""):
+        assert not _openverse_license_name(code, "4.0")
+
+
+def test_openverse_search_expands_every_dish_and_common_regional_spellings():
+    # Generic exact + food + Indian food queries are created for every name, not one dish.
+    for dish in ("Sabudana Khichdi", "Paneer Tikka", "Chocolate Brownie", "Veg Sandwich"):
+        query = _openverse_search_query(dish)
+        assert dish.lower() in query.lower()
+        assert "food" in query.lower()
+        assert len(query) <= 200
+    assert "sago" in _openverse_search_query("Sabudana Khichdi").lower()
+    assert "poha" in _openverse_search_query("Pohe").lower()
+
+
+def test_openverse_match_checks_titles_tags_and_ingredient_aliases():
+    assert _openverse_relevance("Sabudana Khichdi", {
+        "title": "Sabudana Khichdi served on a plate",
+        "tags": [],
+    }) > 0
+    assert _openverse_relevance("Sabudana Khichdi", {
+        "title": "Tapioca pearls served on a plate",
+        "tags": [{"name": "Indian cuisine"}],
+    }) > 0
+    assert _openverse_relevance("Sabudana Khichdi", {
+        "title": "Tapioca plant in a green field",
+        "tags": [{"name": "botany"}],
+    }) == 0
+    assert _openverse_relevance("Paneer Tikka", {
+        "title": "A dog running in a park",
+        "tags": [],
+    }) == 0
+
