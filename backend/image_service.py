@@ -185,10 +185,6 @@ async def apply_catalogue_image(db, item, *, image_changed=False, name_changed=F
     if not item.image_id:
         item.photo = None
         item.image_confirmed = False
-        if image_changed:
-            item.is_available = False
     else:
         image = await stored_image(db, item.image_id, lock=True)
         item.photo = image_url(image.id)
-    if item.is_available:
-        await require_publishable_image(db, item)
