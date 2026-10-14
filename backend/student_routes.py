@@ -15,7 +15,6 @@ from auth import (
     verify_password,
 )
 from config import settings
-from food_image_models import FoodImage
 from database import cache_get, cache_invalidate_prefix, cache_set, get_db
 from models import (
     DayOfWeek,
@@ -123,19 +122,15 @@ async def get_food_items(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Returns available menu items with unit prices, photos, prep time, ratings,
-    and customization options. Unavailable records remain in admin inventory and
-    immutable order snapshots, never in this public catalogue.
+    Returns available menu items with unit prices, prep time, ratings, and
+    customization options. Photos are optional; text-only dishes remain orderable.
     """
-    cache_key = f"canteen:food_items:public_photographed_v2:{category}:{veg}:{query}"
+    cache_key = f"canteen:food_items:public_menu_v3:{category}:{veg}:{query}"
     cached = await cache_get(cache_key)
     if cached:
         return cached
 
-    stmt = select(FoodItem).join(FoodImage, FoodImage.id == FoodItem.image_id).where(
-        FoodItem.is_available.is_(True), FoodItem.image_confirmed.is_(True),
-        FoodImage.is_archived.is_(False), FoodImage.rights_confirmed.is_(True),
-        FoodImage.published_at.is_not(None))
+    stmt = select(FoodItem).where(FoodItem.is_available.is_(True))
     if category and category.lower() != "all":
         stmt = stmt.where(FoodItem.category.ilike(category.strip()))
     if veg is not None:
@@ -166,10 +161,7 @@ async def get_food_item_detail(
     db: AsyncSession = Depends(get_db),
 ):
     """Retrieves full information for a single food item including customization options."""
-    stmt = select(FoodItem).join(FoodImage, FoodImage.id == FoodItem.image_id).where(
-        FoodItem.id == item_id, FoodItem.is_available.is_(True), FoodItem.image_confirmed.is_(True),
-        FoodImage.is_archived.is_(False), FoodImage.rights_confirmed.is_(True),
-        FoodImage.published_at.is_not(None))
+    stmt = select(FoodItem).where(FoodItem.id == item_id, FoodItem.is_available.is_(True))
     res = await db.execute(stmt)
     item = res.scalar_one_or_none()
 
