@@ -133,8 +133,6 @@ async def update_catalogue(item_id:str,payload:CatalogueInput,db:AsyncSession=De
         if image:
             row.image_id = image.id
             await apply_catalogue_image(db, row, image_changed=row.image_id != old_image, name_changed=name_changed, confirmed=True)
-        elif row.is_available and not (row.image_id and payload.imageConfirmed is True):
-            raise HTTPException(422, "No suitable freely licensed food photo was found. Try a more specific dish name and save again.")
         elif row.image_id and payload.imageConfirmed is True:
             # Explicitly confirmed legacy/admin edits may keep their existing managed image.
             await apply_catalogue_image(db,row,image_changed=False,name_changed=name_changed,confirmed=True)
