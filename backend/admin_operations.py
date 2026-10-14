@@ -121,15 +121,24 @@ async def update_catalogue(item_id:str,payload:CatalogueInput,db:AsyncSession=De
     if payload.id is not None and payload.id!=item_id: raise HTTPException(422,"Catalogue identifiers cannot change")
     row=await locked_food(db,item_id)
     old_image,old_name=row.image_id,row.name
-    for key,value in catalogue_values(payload).items(): setattr(row,key,value)
+    updates=catalogue_values(payload)
+    for key,value in updates.items(): setattr(row,key,value)
     name_changed = row.name != old_name
+    image_removed = "image_id" in updates and updates["image_id"] is None
+    if image_removed:
+        row.is_available=False
+        await apply_catalogue_image(db,row,image_changed=True,name_changed=name_changed,confirmed=False)
+        return await save_food(db,row)
     if name_changed or not row.image_id:
         image = await find_and_store_food_image(db, row.name, admin.id)
         if image:
             row.image_id = image.id
             await apply_catalogue_image(db, row, image_changed=row.image_id != old_image, name_changed=name_changed, confirmed=True)
-        elif row.is_available:
+        elif row.is_available and not (row.image_id and payload.imageConfirmed is True):
             raise HTTPException(422, "No suitable freely licensed food photo was found. Try a more specific dish name and save again.")
+        elif row.image_id and payload.imageConfirmed is True:
+            # Explicitly confirmed legacy/admin edits may keep their existing managed image.
+            await apply_catalogue_image(db,row,image_changed=False,name_changed=name_changed,confirmed=True)
         else:
             row.image_id = None
             await apply_catalogue_image(db, row, image_changed=row.image_id != old_image, name_changed=name_changed, confirmed=False)
