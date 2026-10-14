@@ -2,6 +2,10 @@ name: verify
 on: [push, pull_request]
 permissions:
   contents: read
+# Cancel obsolete per-branch runs when several commits are pushed in quick succession.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   frontend:
     runs-on: ubuntu-latest
