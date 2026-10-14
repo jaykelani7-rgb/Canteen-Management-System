@@ -107,13 +107,15 @@ async def test_unavailable_order_does_not_create_order_or_debit_wallet(mess_clie
         assert (await db.execute(select(func.count()).select_from(WalletTransaction))).scalar_one() == 0
 
 
-async def test_active_photo_missing_or_unconfirmed_is_not_published(mess_client):
+async def test_available_dishes_are_published_without_requiring_photos(mess_client):
     client,sessions,_=mess_client
     await configure_menu(sessions)
     async with sessions() as db:
         db.add(FoodItem(id="missing-photo",name="Unphotographed dish",price=25,is_available=True))
         existing=await db.get(FoodItem,"public-pohe"); existing.image_confirmed=False
         await db.commit()
-    assert {item["id"] for item in (await client.get("/api/menu/items")).json()}=={"public-dosa"}
-    assert (await client.get("/api/menu/items/missing-photo")).status_code==404
-    assert (await client.get("/api/menu/items/public-pohe")).status_code==404
+    visible={item["id"]:item for item in (await client.get("/api/menu/items")).json()}
+    assert set(visible)=={"public-dosa","public-pohe","missing-photo"}
+    assert visible["missing-photo"]["photo"] in ("", None)
+    assert (await client.get("/api/menu/items/missing-photo")).status_code==200
+    assert (await client.get("/api/menu/items/public-pohe")).status_code==200
