@@ -150,10 +150,26 @@ async def update_availability(item_id:str,payload:AvailabilityInput,db:AsyncSess
     return await save_food(db,row)
 
 @admin_operations_router.delete("/catalogue/{item_id}",response_model=FoodItemResponse)
-async def disable_catalogue(item_id:str,db:AsyncSession=Depends(get_db),admin:AdminUser=Depends(get_current_admin)):
+async def delete_catalogue(item_id:str,db:AsyncSession=Depends(get_db),admin:AdminUser=Depends(get_current_admin)):
     row=await locked_food(db,item_id)
-    row.is_available=False
-    return await save_food(db,row)
+    snapshot=row.to_dict()
+    try:
+        await db.delete(row)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        row.is_available=False
+        row.name=f"[removed] {row.name}"
+        row.photo=None
+        row.image_id=None
+        await db.commit()
+        await db.refresh(row)
+        await cache_invalidate_prefix("canteen:food_items:")
+        await cache_invalidate_prefix("canteen:menu:")
+        return row.to_dict()
+    await cache_invalidate_prefix("canteen:food_items:")
+    await cache_invalidate_prefix("canteen:menu:")
+    return snapshot
 
 @admin_operations_router.get("/orders")
 async def orders(status:OrderStatusEnum|None=None,limit:int=Query(200,ge=1,le=200),offset:int=Query(0,ge=0),db:AsyncSession=Depends(get_db),admin:AdminUser=Depends(get_current_admin)):

@@ -117,12 +117,16 @@ export default function AlaCarteManagement({ onShowToast }: AlaCarteManagementPr
     })
   }
   const handleDeleteItem = (id: string, name: string) => {
-    if (busy || !confirm('Disable "' + name + '" in the student catalogue? Existing order history will be preserved.')) return
+    if (busy) return
+    const confirmed = window.confirm(
+      'Delete "' + name + '" from the active catalogue? This removes it from student ordering immediately and keeps historical orders unchanged.'
+    )
+    if (!confirmed) return
     void mutate(async () => {
-      await adminOperationsApi.removeItem(id)
+      const deleted = await adminOperationsApi.removeItem(id)
       const rows = await adminOperationsApi.catalogue()
       setItems(rows.map(toInventoryItem))
-      onShowToast?.('Item Disabled', name + ' is no longer available for ordering.', 'info')
+      onShowToast?.('Item Deleted', deleted.name + ' was removed from the active catalogue.', 'success')
     })
   }
 

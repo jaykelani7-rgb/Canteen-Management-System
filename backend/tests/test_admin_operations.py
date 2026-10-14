@@ -24,7 +24,7 @@ async def test_operations_require_admin(mess_client):
     student={"Authorization":"Bearer "+create_access_token({"sub":"linked-student","role":"student"})}
     assert (await client.get("/api/admin/catalogue",headers=student)).status_code==403
 
-async def test_catalogue_is_shared_with_student_menu_and_soft_delete(mess_client):
+async def test_catalogue_is_shared_with_student_menu_and_hard_delete(mess_client):
     client,sessions,_=mess_client
     from models import FoodItem
     async with sessions() as db:
@@ -40,11 +40,32 @@ async def test_catalogue_is_shared_with_student_menu_and_soft_delete(mess_client
     assert changed.status_code==200 and changed.json()["price"]==30
     assert (await client.patch("/api/admin/catalogue/"+item_id+"/availability",json={"available":False})).json()["available"] is False
     assert (await client.delete("/api/admin/catalogue/"+item_id)).status_code==200
-    assert any(row["id"]==item_id and not row["available"] for row in (await client.get("/api/admin/catalogue")).json())
-    from sqlalchemy import select,func
+    admin_rows=(await client.get("/api/admin/catalogue")).json(); student_rows=(await client.get("/api/menu/items")).json()
+    assert all(row["id"]!=item_id for row in admin_rows)
+    assert all(row["id"]!=item_id for row in student_rows)
+    from sqlalchemy import select
     from models import FoodItem
     async with sessions() as db:
-        assert (await db.execute(select(func.count()).select_from(FoodItem).where(FoodItem.id==item_id))).scalar_one()==1
+        assert (await db.execute(select(FoodItem).where(FoodItem.id==item_id))).scalar_one_or_none() is None
+
+async def test_catalogue_delete_keeps_order_history_intact(mess_client):
+    client,sessions,_=mess_client
+    from models import FoodItem
+    async with sessions() as db:
+        photo=await attach_test_image(db,FoodItem(name="Delete history snack"))
+        await db.commit()
+    created=await client.post("/api/admin/catalogue",json={"imageId":photo.id,"imageConfirmed":True,"name":"Delete history snack","price":18,"category":"Snacks","timingWindow":"all_day","available":True})
+    item_id=created.json()["id"]
+    async with sessions() as db:
+        db.add(Order(order_number="#DEL-HIST-1",student_id="linked-student",items_json=[{"id":item_id,"name":"Delete history snack","qty":1,"price":18}],item_total=18,total_amount=18,order_status="Completed",payment_status="Paid",created_at=datetime.now(timezone.utc)))
+        await db.commit()
+    delete_response=await client.delete("/api/admin/catalogue/"+item_id)
+    assert delete_response.status_code==200,delete_response.text
+    async with sessions() as db:
+        from sqlalchemy import select
+        order=(await db.execute(select(Order).where(Order.order_number=="#DEL-HIST-1"))).scalar_one()
+        assert order.items_json[0]["id"]==item_id
+        assert order.total_amount==18
 
 async def test_catalogue_validates_money_and_window(mess_client):
     client,_,_=mess_client
