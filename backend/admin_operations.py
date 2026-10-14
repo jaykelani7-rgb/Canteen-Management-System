@@ -107,8 +107,6 @@ async def create_catalogue(payload:CatalogueInput,db:AsyncSession=Depends(get_db
         if image:
             row.image_id = image.id
             await apply_catalogue_image(db, row, image_changed=True, confirmed=True)
-        elif row.is_available:
-            raise HTTPException(422, "No suitable freely licensed food photo was found. Try a more specific dish name and save again.")
         else:
             await apply_catalogue_image(db, row, image_changed=True, confirmed=False)
     else:
