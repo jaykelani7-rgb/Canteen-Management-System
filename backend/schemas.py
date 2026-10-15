@@ -41,9 +41,9 @@ class WeeklyMenuItemCreate(BaseModel):
         return cleaned
 
     @model_validator(mode="after")
-    def lunch_configuration_only(self):
-        if self.meal_type != MealType.LUNCH and (self.ordering_enabled or self.sabji_options):
-            raise ValueError("Lunch ordering settings apply only to lunch")
+    def bundle_configuration_only(self):
+        if self.meal_type not in {MealType.LUNCH, MealType.DINNER} and (self.ordering_enabled or self.sabji_options):
+            raise ValueError("Meal bundle ordering settings apply only to lunch and dinner")
         return self
 
 

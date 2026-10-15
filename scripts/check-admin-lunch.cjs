@@ -31,7 +31,7 @@ async function check(name, run) { await run(); count++; console.log('PASS ' + na
   const props = { day: 'Thursday', meal, onSaved: row => saved.push(row), onShowToast: (...args) => toasts.push(args) };
   const render = (key = 'editor', overrides = {}) => { runtime.begin(key); const tree = editor.default({ ...props, ...overrides }); runtime.commit(); return tree; };
   const field = (tree, label) => nodes(tree).find(node => node.props?.['aria-label'] === label);
-  const submit = tree => nodes(tree).find(node => node.type === 'button' && text(node).includes('Save lunch')).props.onClick();
+  const submit = tree => nodes(tree).find(node => node.type === 'button' && /Save (lunch|dinner)/.test(text(node))).props.onClick();
   await check('Editor loads selected-day complete contents and both configured sabjis', () => {
     const tree = render(); assert.equal(field(tree, 'Complete lunch contents').props.value, meal.items.join('\n'));
     assert.equal(field(tree, 'Sabji option 1').props.value, 'Bhindi'); assert.equal(field(tree, 'Sabji option 2').props.value, 'Potato');
@@ -71,5 +71,16 @@ async function check(name, run) { await run(); count++; console.log('PASS ' + na
     const draw = () => { rt.begin('orders'); const tree = live.default({}); rt.commit(); return tree; }; draw(); await tick(); const output = text(draw());
     assert.ok(output.includes('Sabji:  Bhindi')); assert.ok(output.includes('3 chapatis · Salad · Bhindi')); assert.ok(output.includes('2026-10-15')); assert.ok(output.includes('Tea')); assert.ok(output.includes('Start Cooking'));
   });
-  console.log(count + ' Admin lunch checks passed.');
+  await check('Shared Dinner editor saves only dinner and reports Dinner-specific validation', async () => {
+    const dinner={...meal,meal_type:'dinner',items:['Chapati','Salad','Rice','Beans','Peas'],sabji_options:['Beans','Peas']};
+    let tree=render('dinner',{mealType:'dinner',meal:dinner}); assert.equal(field(tree,'Complete dinner contents').props.value,dinner.items.join('\n')); assert.match(text(tree),/Dinner/); submit(tree);await tick();assert.deepEqual(calls.at(-1),[dinner]);assert.equal(toasts.at(-1)[0],'Dinner configuration saved');
+    field(render('dinner-invalid',{mealType:'dinner',meal:dinner}),'Complete dinner contents').props.onChange({target:{value:''}});submit(render('dinner-invalid',{mealType:'dinner',meal:dinner}));await tick();assert.match(text(render('dinner-invalid',{mealType:'dinner',meal:dinner})),/complete dinner contents/);
+  });
+  await check('Weekly timetable exposes independent Lunch/Dinner editors and preserves lunch on dinner save', async () => {
+    const rt=hooks(),marker=()=>null,dinner={...meal,meal_type:'dinner',items:['Rice','Beans','Peas'],sabji_options:['Beans','Peas'],ordering_enabled:false};
+    const weekly=load('src/components/WeeklyScheduleView.tsx',{react:rt.react,'../lib/adminOperationsApi':{adminOperationsApi:{weeklyMenu:async()=>[meal,dinner]}},'./AdminLunchConfiguration':{default:marker}});
+    const draw=()=>{rt.begin('independent-weekly');const tree=weekly.default({});rt.commit();return tree;};draw();await tick();let tree=draw();nodes(tree).find(node=>node.type==='button'&&text(node)==='Thursday').props.onClick();tree=draw();
+    let editors=nodes(tree).filter(node=>node.type===marker);assert.equal(editors.length,2);const lunchBefore=JSON.stringify(editors.find(node=>node.props.mealType==='lunch').props.meal);const edited={...dinner,items:[...dinner.items,'Dal']};editors.find(node=>node.props.mealType==='dinner').props.onSaved(edited);editors=nodes(draw()).filter(node=>node.type===marker);assert.equal(JSON.stringify(editors.find(node=>node.props.mealType==='lunch').props.meal),lunchBefore);assert.deepEqual(editors.find(node=>node.props.mealType==='dinner').props.meal.items,edited.items);
+  });
+  console.log(count + ' Admin lunch/dinner checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -131,23 +131,17 @@ export default function WeeklyScheduleView({
       )}
 
       <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2">
-        {!loading && !error && <AdminLunchConfiguration
-          key={selectedDay}
+        {!loading && !error && (['lunch', 'dinner'] as const).map(mealType => <AdminLunchConfiguration
+          key={selectedDay + '-' + mealType}
           day={selectedDay}
-          meal={weeklyMeals.find(meal => meal.day === selectedDay && meal.meal_type === 'lunch')}
+          mealType={mealType}
+          meal={weeklyMeals.find(meal => meal.day === selectedDay && meal.meal_type === mealType)}
           onShowToast={onShowToast}
           onSaved={meal => {
-            setWeeklyMeals(previous => [...previous.filter(row => row.day !== meal.day || row.meal_type !== 'lunch'), meal])
-            setSchedule(previous => ({ ...previous, [meal.day]: { ...(previous[meal.day] || emptyDay()), lunch: meal.items } }))
+            setWeeklyMeals(previous => [...previous.filter(row => row.day !== meal.day || row.meal_type !== mealType), meal])
+            setSchedule(previous => ({ ...previous, [meal.day]: { ...(previous[meal.day] || emptyDay()), [mealType]: meal.items } }))
           }}
-        />}
-        <MealCard
-          title="Dinner"
-          icon="🍛"
-          time="19:30 – 22:30"
-          dishes={currentSchedule.dinner}
-          emptyMessage={`No dinner menu saved for ${selectedDay}.`}
-        />
+        />)}
       </div>
     </div>
   )

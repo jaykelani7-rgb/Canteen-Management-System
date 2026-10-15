@@ -186,6 +186,13 @@ async def get_current_lunch(response: Response, db: AsyncSession = Depends(get_d
     return await current_lunch(db)
 
 
+@menu_router.get("/dinner", summary="Get current IST dinner bundles and required sabji choices")
+async def get_current_dinner(response: Response, db: AsyncSession = Depends(get_db)):
+    from lunch_service import current_dinner
+    response.headers["Cache-Control"] = "no-store"
+    return await current_dinner(db)
+
+
 @menu_router.get(
     "/today",
     response_model=TodayMenuResponse,
@@ -370,7 +377,7 @@ async def get_ala_carte_items(
 )
 async def upload_weekly_menu(payload:WeeklyMenuBatchUpload,db:AsyncSession=Depends(get_db),admin:AdminUser=Depends(get_current_admin)):
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-    from lunch_service import validate_lunch_configuration
+    from lunch_service import validate_meal_configuration
     insert=pg_insert if db.bind.dialect.name=="postgresql" else sqlite_insert
     entries={(item.day.value,item.meal_type.value):item for item in payload.schedule}
     values=[]
@@ -387,16 +394,16 @@ async def upload_weekly_menu(payload:WeeklyMenuBatchUpload,db:AsyncSession=Depen
             previous=existing.get((day,meal))
             sabji_options=item.sabji_options if item.sabji_options is not None else list(previous.sabji_options or []) if previous else []
             enabled=item.ordering_enabled if item.ordering_enabled is not None else bool(previous and previous.ordering_enabled)
-            if meal == MealType.LUNCH.value and item.sabji_options is None and item.ordering_enabled is None:
-                # OCR/older clients replace meal contents without configuring lunch.
+            if meal in {MealType.LUNCH.value, MealType.DINNER.value} and item.sabji_options is None and item.ordering_enabled is None:
+                # OCR/older clients replace meal contents without configuring bundles.
                 # Keep inherited choices only while they are valid for the new meal,
                 # including when ordering was already disabled. Never infer new choices.
                 try:
-                    validate_lunch_configuration(item.items,sabji_options,True)
+                    validate_meal_configuration(item.items,sabji_options,True,meal)
                 except HTTPException:
                     sabji_options=[]
                     enabled=False
-            validate_lunch_configuration(item.items,sabji_options,enabled)
+            validate_meal_configuration(item.items,sabji_options,enabled,meal)
             values.append({"day":day,"meal_type":meal,"items":item.items,
                            "sabji_options":sabji_options,"ordering_enabled":enabled})
         # Submit every reviewed meal slot in one database round trip. A weekly OCR

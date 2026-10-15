@@ -117,16 +117,25 @@ async def test_thali_excludes_unavailable_paneer_and_preserves_past_order_snapsh
     await assert_configuration_preserved(mess_client[1])
 
 
-async def test_both_sabjis_unavailable_blocks_lunch_without_erasing_configuration(mess_client):
+async def test_both_sabjis_unavailable_blocks_only_chapati_without_erasing_configuration(mess_client):
     client, headers, initial = await ready(mess_client)
     await toggle(client, 'Paneer', False)
     await toggle(client, 'Aloo', False)
     current = (await client.get('/api/menu/lunch')).json()
-    assert current['available'] is False
+    assert current['available'] is True
     assert current['sabjiOptions'] == []
+    by_id = {row['id']: row for row in current['options']}
+    assert by_id['lunch-chapati-bhaji']['available'] is False
+    assert by_id['lunch-thali']['available'] is True
     for thali in (False, True):
         response = await order(client, headers, [item(initial, thali=thali, choice='Aloo')])
         assert response.status_code == 409, response.text
+    rejected = await order(client, headers, [item(current, choice='Aloo')])
+    assert rejected.status_code == 409, rejected.text
+    accepted = await order(client, headers, [item(current, thali=True)])
+    assert accepted.status_code == 201, accepted.text
+    assert accepted.json()['total'] == 80
+    assert accepted.json()['items'][0]['contents'] == [name for name in CONTENTS if name not in SABJIS]
     await assert_configuration_preserved(mess_client[1])
     await toggle(client, 'Aloo', True)
     restored = (await client.get('/api/menu/lunch')).json()

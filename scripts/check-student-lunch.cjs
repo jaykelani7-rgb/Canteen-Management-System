@@ -46,7 +46,7 @@ const meal = { id: 'meal', name: 'Dosa', desc: 'South Dish', category: 'Meals', 
 
 function appHarness(overrides = {}) {
   const runtime = hooks(), user = { id: 'student-a', name: 'Student' };
-  const api = { hasSession: () => false, getMenu: async () => [meal], getLunchMenu: async () => ({ date: '2026-10-15', day: 'Thursday', mealType: 'lunch', available: false, unavailableReason: 'Lunch unconfigured', mealRevision: null, contents: [], sabjiOptions: [], options: [] }), getOrders: async () => [], getNotifications: async () => [], getMe: async () => ({ success: true, user }), login: async () => ({ success: true, user }), logout: async () => {}, ...overrides };
+  const api = { hasSession: () => false, getMenu: async () => [meal], getDinnerMenu: async () => ({ date: '2026-10-15', day: 'Thursday', mealType: 'dinner', available: false, unavailableReason: 'Dinner unconfigured', mealRevision: null, contents: [], sabjiOptions: [], options: [] }), getLunchMenu: async () => ({ date: '2026-10-15', day: 'Thursday', mealType: 'lunch', available: false, unavailableReason: 'Lunch unconfigured', mealRevision: null, contents: [], sabjiOptions: [], options: [] }), getOrders: async () => [], getNotifications: async () => [], getMe: async () => ({ success: true, user }), login: async () => ({ success: true, user }), logout: async () => {}, ...overrides };
   const app = load('student/src/App.tsx', {
     react: runtime.react, '../../src/lib/apiClient': { apiClient: api, STUDENT_SESSION_EXPIRED: 'expired' },
     '../../src/lib/paymentCheckout': { checkoutIntent: () => 'lunch-test-key', clearCheckoutIntent() {} }, '../../src/lib/studentLunch': load('src/lib/studentLunch.ts', {}), '../../src/components/FoodImage': { default: function FoodImage() {} },
@@ -61,6 +61,8 @@ function appHarness(overrides = {}) {
 const h = load('src/lib/studentLunch.ts', {});
 const lunch = { date: '2026-10-15', day: 'Thursday', mealType: 'lunch', available: true, unavailableReason: null, mealRevision: 'rev-a', contents: ['Rice','Dal','Chapati','Salad','Cabbage','Potato'], sabjiOptions: ['Cabbage','Potato'], options: [{id:h.CHAPATI_BHAJI_ID,name:'Chapati Bhaji',price:45},{id:h.THALI_ID,name:'Thali',price:80}] };
 const [chapati, thali] = h.lunchItems(lunch);
+const dinner = { ...lunch, mealType: 'dinner', currentMealType: 'dinner', serviceWindow: '19:30 - 22:30', mealRevision: 'dinner-rev', contents: ['3 chapatis', 'Salad', 'Rice', 'Dal', 'Beans', 'Peas'], sabjiOptions: ['Beans', 'Peas'], options: [{ id: h.DINNER_CHAPATI_BHAJI_ID, name: 'Chapati Bhaji', price: 45 }, { id: h.DINNER_THALI_ID, name: 'Thali', price: 80 }] };
+const [dinnerChapati, dinnerThali] = h.lunchItems(dinner);
 const paneerLunch = { ...lunch, contents: ['3 chapatis','Salad','Paneer','Aloo'], sabjiOptions: ['Paneer','Aloo'] };
 const alooLunch = { ...paneerLunch, mealRevision: 'rev-aloo', contents: ['3 chapatis','Salad','Aloo'], sabjiOptions: ['Aloo'] };
 const [alooChapati, alooThali] = h.lunchItems(alooLunch);
@@ -155,5 +157,36 @@ function view(app, name) { app.render(); app.runtime.begin(name); return app.app
   await check('Order details render immutable contents, choice and meal date', async () => {
     const app=harness();await app.login();app.render().selectOrder({id:'old',number:'#1',status:'Completed',payment:'Paid',createdAt:'2026-10-14T07:00:00Z',items:[{id:h.CHAPATI_BHAJI_ID,name:'Chapati Bhaji',qty:1,price:45,contents:['3 chapatis','Salad','Old sabji'],sabjiChoice:'Old sabji',mealDate:'2026-10-14',mealType:'lunch'}],itemTotal:45,packagingFee:0,gst:0,total:45,paymentMethod:'wallet',pickupCounter:'A'}); const page=view(app,'OrderDetailsScreen');assert.match(text(page),/Old sabji/);assert.match(text(page),/3 chapatis.*Salad.*Old sabji/);assert.match(text(page),/2026-10-14.*lunch/);assert.doesNotMatch(text(page),/Cabbage/);
   });
-  console.log(`Student lunch checks passed: ${passed}. No network, database, deployment or APK changes performed.`);
+  await check('Dinner shares helpers while retaining independent IDs, contents and cart keys', () => {
+    assert.equal(dinnerChapati.price,45); assert.equal(dinnerThali.price,80); assert.equal(dinnerThali.lunch.mealType,'dinner');
+    assert.equal(h.lunchContents(dinnerThali).join('|'),dinner.contents.join('|'));
+    assert.notEqual(h.lunchLineKey(chapati,'Potato'),h.lunchLineKey(dinnerChapati,'Potato'));
+    assert.equal(h.mealCartError([{item:chapati,sabjiChoice:'Potato'},{item:dinnerChapati,sabjiChoice:'Beans'}],lunch,dinner),null);
+    assert.match(h.mealCartError([{item:dinnerChapati,sabjiChoice:'Potato'}],lunch,dinner),/exactly one/);
+    assert.match(h.mealCartError([{item:dinnerThali}],lunch,null),/Dinner could not be verified/);
+  });
+  await check('Server current meal selects Dinner and both screens filter only meal bundles', async () => {
+    const app=harness({getDinnerMenu:async()=>structuredClone(dinner)}); await app.login(); assert.equal(app.render().selectedMeal,'dinner');
+    for (const name of ['HomeScreen','MenuScreen']) {const cards=nodes(view(app,name)).filter(node=>node.type?.name==='FoodCardWide'&&node.props.item.lunch);assert.equal(cards.length,2);assert.ok(cards.every(node=>node.props.item.id.startsWith('dinner-')));}
+    app.render().setSelectedMeal('lunch'); await app.render().refresh(); assert.equal(app.render().selectedMeal,'lunch');
+    const menu=nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide'); assert.ok(menu.some(node=>node.props.item.id===meal.id)); assert.ok(menu.filter(node=>node.props.item.lunch).every(node=>node.props.item.id.startsWith('lunch-')));
+  });
+  await check('Dinner Details requires its own sabji, sends dinner revision and keeps lunch snapshot', async () => {
+    const calls=[]; const app=harness({getDinnerMenu:async()=>structuredClone(dinner),createOrder:async(items)=>{calls.push(items);return {id:'d1',orderId:8,items:[],payment:'Paid'};}}); await app.login();
+    app.render().select(app.render().menu.find(item=>item.id===h.DINNER_CHAPATI_BHAJI_ID)); let page=view(app,'DetailsScreen');
+    const radios=nodes(page).filter(node=>node.type==='input'&&node.props.type==='radio'); assert.equal(radios.length,2); assert.ok(radios.every(node=>!node.props.checked));
+    assert.equal(nodes(page).find(node=>node.type?.name==='Button'&&text(node).includes('Add')).props.disabled,true);
+    radios.find(node=>node.props.value==='Beans').props.onChange(); page=view(app,'DetailsScreen'); nodes(page).find(node=>node.type?.name==='Button'&&text(node).includes('Add')).props.onClick();
+    assert.equal(app.render().cartTotal,45); await app.render().submitOrder('wallet'); assert.equal(JSON.stringify(calls[0]),JSON.stringify([{id:h.DINNER_CHAPATI_BHAJI_ID,qty:1,mealRevision:'dinner-rev',sabjiChoice:'Beans'}])); assert.equal(chapati.lunch.revision,'rev-a');
+  });
+  await check('Mixed-period checkout refreshes both APIs and rejects stale dinner without creating payment', async () => {
+    let created=0,lunchReads=0,dinnerReads=0;const app=harness({getDinnerMenu:async()=>structuredClone(dinner),createOrder:async()=>{created++;throw Error('Should not create');}}); await app.login(); app.render().add(chapati,1,'Potato'); app.render().add(dinnerThali);
+    assert.equal(app.render().cart.length,2); app.api.getLunchMenu=async()=>{lunchReads++;return structuredClone(lunch);}; app.api.getDinnerMenu=async()=>{dinnerReads++;return {...structuredClone(dinner),mealRevision:'changed-dinner'};};
+    await assert.rejects(app.render().submitOrder('wallet'),/dinner menu has changed/); assert.ok(lunchReads>=1); assert.ok(dinnerReads>=1); assert.equal(created,0); assert.equal(app.render().cart.length,2); assert.equal(app.render().cart[1].item.lunch.revision,'dinner-rev');
+  });
+  await check('Dinner with no sabji disables only Chapati and leaves configured Thali orderable', async () => {
+    const noSabji={...structuredClone(dinner),sabjiOptions:[],options:[{...dinner.options[0],available:false,unavailableReason:'No dinner sabji available'},dinner.options[1]]};
+    const [blocked,allowed]=h.lunchItems(noSabji); assert.equal(blocked.available,false); assert.equal(allowed.available,true); assert.equal(h.mealCartError([{item:allowed}],lunch,noSabji),null); assert.match(h.mealCartError([{item:blocked}],lunch,noSabji),/No dinner sabji/);
+  });
+  console.log(`Student lunch/dinner checks passed: ${passed}. No network, database, deployment or APK changes performed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

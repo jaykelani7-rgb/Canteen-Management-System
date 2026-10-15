@@ -6,7 +6,7 @@ export interface UserProfile {
 export interface AuthResponse { success: boolean; message: string; user?: UserProfile; token?: string | null }
 export interface RegisterInput { rollNumber: string; name: string; passcode: string; branch?: string; phone?: string; email?: string }
 export interface StudentLunchMenu {
-  date: string; day: string; mealType: 'lunch'; available: boolean;
+  date: string; day: string; mealType: 'lunch' | 'dinner'; serviceWindow?: string; currentMealType?: string; available: boolean;
   unavailableReason: string | null; mealRevision: string | null;
   contents: string[]; sabjiOptions: string[];
   options: { id: string; name: string; price: number; available?: boolean; unavailableReason?: string | null }[];
@@ -19,7 +19,7 @@ export interface StudentMenuItem {
   category: 'Snacks' | 'Meals' | 'Beverages' | 'Desserts' | 'Quick Bites'; veg: boolean; available: boolean; tag?: string;
   emoji: string; photo: string; photoCredits?: string; imageId?: string | null; calories?: number;
   customizations?: { name: string; price: number }[];
-  lunch?: { date: string; revision: string | null; contents: string[]; sabjiOptions: string[]; unavailableReason: string | null };
+  lunch?: { mealType?: 'lunch' | 'dinner'; serviceWindow?: string; date: string; revision: string | null; contents: string[]; sabjiOptions: string[]; unavailableReason: string | null };
 }
 export type StudentOrderStatus = 'Payment Pending' | 'Queued' | 'Preparing' | 'Ready' | 'Picked Up' | 'Completed' | 'Delayed' | 'Cancelled'
 export interface GatewayCheckout { provider: 'razorpay'; keyId: string; providerOrderId: string; amountPaise: number; currency: string }

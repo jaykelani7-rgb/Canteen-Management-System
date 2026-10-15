@@ -89,6 +89,7 @@ export const apiClient = {
   },
   getMenu: () => request<StudentMenuItem[]>('/menu/items', 'GET', undefined, false),
   getLunchMenu: () => request<StudentLunchMenu>('/menu/lunch', 'GET', undefined, false),
+  getDinnerMenu: () => request<StudentLunchMenu>('/menu/dinner', 'GET', undefined, false),
   getMenuItem: (id: string) => request<StudentMenuItem>(`/menu/items/${encodeURIComponent(id)}`, 'GET', undefined, false),
   getOrders: () => request<StudentOrder[]>('/student/orders'),
   getOrder: (id: number) => request<StudentOrder>(`/student/orders/${id}`),
