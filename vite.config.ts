@@ -9,13 +9,28 @@ import { readFileSync } from 'node:fs'
 // Vite configuration: https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const proxy = { '/api': { target: env.FASTAPI_URL || 'http://127.0.0.1:8000', changeOrigin: true } }
+  const productionDefaults: Record<string, string> = mode === 'production'
+    ? {
+        VITE_API_BASE_URL: 'https://canteen-staging-api.onrender.com',
+        VITE_STUDENT_APP_URL: 'https://canteenos-student-krishna.pages.dev',
+        VITE_ADMIN_APP_URL: 'https://canteenos-admin-krishna.pages.dev',
+      }
+    : {}
+  const runtimeEnv = { ...productionDefaults, ...env }
+  const proxy = { '/api': { target: runtimeEnv.FASTAPI_URL || 'http://127.0.0.1:8000', changeOrigin: true } }
   const https = env.HTTPS_KEY_FILE && env.HTTPS_CERT_FILE ? { key: readFileSync(env.HTTPS_KEY_FILE), cert: readFileSync(env.HTTPS_CERT_FILE) } : undefined
   // .figma/make/deploy-preview passes `--mode development` for cached-preview builds.
   const emitSourcemaps = mode === 'development'
 
   return {
     base: process.env.FIGMA_PUBLIC_URL ? `${process.env.FIGMA_PUBLIC_URL}/` : '/',
+    define: mode === 'production' ? {
+      'import.meta.env.VITE_API_BASE_URL': JSON.stringify(runtimeEnv.VITE_API_BASE_URL),
+      'import.meta.env.VITE_STUDENT_APP_URL': JSON.stringify(runtimeEnv.VITE_STUDENT_APP_URL),
+      'import.meta.env.VITE_ADMIN_APP_URL': JSON.stringify(runtimeEnv.VITE_ADMIN_APP_URL),
+      'import.meta.env.VITE_AUTH_COOKIE_MODE': JSON.stringify('false'),
+      'import.meta.env.VITE_NATIVE_APP': JSON.stringify('false'),
+    } : undefined,
     build: {
       outDir: 'dist/admin',
       sourcemap: emitSourcemaps ? 'inline' : false,

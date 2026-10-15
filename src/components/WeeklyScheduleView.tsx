@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { adminOperationsApi, type WeeklyMeal } from '../lib/adminOperationsApi'
+import AdminLunchConfiguration from './AdminLunchConfiguration'
 
 interface WeeklyScheduleViewProps {
   onShowToast?: (title: string, description?: string, type?: 'success' | 'info' | 'warning' | 'error') => void
@@ -46,8 +47,9 @@ function MealCard({ title, icon, time, dishes, emptyMessage }: {
 }
 
 export default function WeeklyScheduleView({
-  onNavigateToUpload,
+  onNavigateToUpload, onShowToast,
 }: WeeklyScheduleViewProps) {
+  const [weeklyMeals, setWeeklyMeals] = useState<WeeklyMeal[]>([])
   const [schedule, setSchedule] = useState<Record<string, DaySchedule>>({})
   const [selectedDay, setSelectedDay] = useState<string>(new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'long' }))
   const [loading, setLoading] = useState(true)
@@ -63,7 +65,7 @@ export default function WeeklyScheduleView({
         next[meal.day] ||= emptyDay()
         next[meal.day][meal.meal_type] = meal.items
       }
-      if (active) setSchedule(next)
+      if (active) { setSchedule(next); setWeeklyMeals(rows) }
     }).catch(cause => {
       if (active) setError((cause as Error).message)
     }).finally(() => {
@@ -129,13 +131,16 @@ export default function WeeklyScheduleView({
       )}
 
       <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2">
-        <MealCard
-          title="Lunch"
-          icon="🍱"
-          time="12:00 – 15:00"
-          dishes={currentSchedule.lunch}
-          emptyMessage={`No lunch menu saved for ${selectedDay}.`}
-        />
+        {!loading && !error && <AdminLunchConfiguration
+          key={selectedDay}
+          day={selectedDay}
+          meal={weeklyMeals.find(meal => meal.day === selectedDay && meal.meal_type === 'lunch')}
+          onShowToast={onShowToast}
+          onSaved={meal => {
+            setWeeklyMeals(previous => [...previous.filter(row => row.day !== meal.day || row.meal_type !== 'lunch'), meal])
+            setSchedule(previous => ({ ...previous, [meal.day]: { ...(previous[meal.day] || emptyDay()), lunch: meal.items } }))
+          }}
+        />}
         <MealCard
           title="Dinner"
           icon="🍛"

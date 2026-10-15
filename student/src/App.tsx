@@ -7,11 +7,10 @@ import {
   type ReactNode,
 } from 'react'
 import { apiClient, STUDENT_SESSION_EXPIRED } from '../../src/lib/apiClient'
-import type { UserProfile, AuthResponse, RegisterInput, StudentMenuItem, StudentOrder, StudentOrderStatus, StudentNotification, OrderTracking, WalletTransaction, WalletTopup } from '../../src/lib/studentTypes'
+import type { UserProfile, AuthResponse, RegisterInput, StudentMenuItem, StudentOrder, StudentOrderStatus, StudentNotification, OrderTracking, WalletTransaction, WalletTopup, StudentLunchMenu } from '../../src/lib/studentTypes'
 import { checkoutIntent, clearCheckoutIntent, completeGatewayPayment, completeWalletTopup, walletTopupIntent, clearWalletTopupIntent, CheckoutDismissed } from '../../src/lib/paymentCheckout'
+import { CHAPATI_BHAJI_ID, isLunchItem, lunchItems, lunchLineKey, lunchCartError, lunchOrderInput, lunchContents } from '../../src/lib/studentLunch'
 import './student.css'
-import FoodImage from '../../src/components/FoodImage'
-import FoodPhotoCredits from '../../src/components/FoodPhotoCredits'
 
 /* ============================================================================
    Smart Canteen OS — Student Mobile App
@@ -44,7 +43,7 @@ type Screen =
   | 'profile'
   | 'wallet'
 
-type CartLine = { item: MenuItem; qty: number }
+type CartLine = { key: string; item: MenuItem; qty: number; sabjiChoice?: string }
 
 type Store = {
   go: (s: Screen) => void
@@ -58,6 +57,8 @@ type Store = {
   error: string | null
   menuLoading: boolean
   menuError: string | null
+  lunch: StudentLunchMenu | null
+  lunchError: string | null
   menuCategory: Category
   setMenuCategory: (category: Category) => void
   refresh: () => Promise<void>
@@ -70,7 +71,7 @@ type Store = {
   registerUser: (input: RegisterInput) => Promise<AuthResponse>
   logoutUser: () => Promise<void>
   cart: CartLine[]
-  add: (item: MenuItem, qty?: number) => void
+  add: (item: MenuItem, qty?: number, sabjiChoice?: string) => boolean
   setQty: (id: string, qty: number) => void
   clear: () => void
   cartCount: number
@@ -974,34 +975,13 @@ function SearchBar({ placeholder = 'Search the menu…' }) {
 
 function FoodCardWide({ item }: { item: MenuItem }) {
   const { add, select, go, cart, setQty } = useStore()
-  const line = cart.find((l) => l.item.id === item.id)
+  const line = cart.find((l) => l.key === lunchLineKey(item) && item.id !== CHAPATI_BHAJI_ID)
   return (
     <div
-      className={`relative flex gap-3 rounded-3xl bg-card p-3 shadow-[0_8px_24px_-16px_rgba(0,0,0,0.35)] ${item.available ? '' : 'opacity-100'}`}
+      className={`flex flex-col gap-3 rounded-3xl bg-card p-3 shadow-[0_8px_24px_-16px_rgba(0,0,0,0.35)] ${item.available ? '' : 'opacity-100'}`}
     >
-      <button
-        onClick={() => {
-          select(item)
-          go('details')
-        }}
-        className="relative h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-paper"
-      >
-        <FoodImage
-          src={item.photo}
-          alt={item.name}
-          className={`h-full w-full object-cover ${item.available ? '' : 'grayscale'}`}
-        />
-        {!item.available && (
-          <div className="absolute inset-0 grid place-items-center bg-black/45 text-center text-[10px] font-bold uppercase tracking-wide text-white">
-            Sold
-            <br />
-            out
-          </div>
-        )}
-      </button>
-
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-start gap-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-start gap-2">
           <VegDot veg={item.veg} />
           <button
             onClick={() => {
@@ -1014,50 +994,63 @@ function FoodCardWide({ item }: { item: MenuItem }) {
               {item.name}
             </h3>
           </button>
-          {item.tag && (
-            <span className="shrink-0 rounded-full bg-amber/15 px-2 py-0.5 text-[9px] font-bold text-[#a86b06]">
-              {item.tag}
-            </span>
-          )}
         </div>
-        <p className="mt-1 line-clamp-2 text-xs text-ink-soft">{item.desc}</p>
-        <div className="mt-auto flex items-center justify-between pt-2">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[15px] font-bold">
-              {rupee(item.price)}
-            </span>
-            <span className="flex items-center gap-0.5 text-[11px] font-semibold text-ink-soft">
-              <Icon name="star" className="h-3 w-3 fill-amber text-amber" />
-              {item.rating}
-            </span>
-          </div>
-          {!item.available ? (
-            <span className="text-[11px] font-bold text-berry">Unavailable</span>
-          ) : line ? (
-            <QtyControl
-              qty={line.qty}
-              onChange={(q) => setQty(item.id, q)}
-              size="sm"
-            />
-          ) : (
-            <button
-              onClick={() => add(item)}
-              className="flex items-center gap-1 rounded-full bg-tangerine-soft px-3 py-1.5 text-xs font-bold text-tangerine-dark active:scale-95"
-            >
-              <Icon name="plus" className="h-3.5 w-3.5" /> Add
-            </button>
-          )}
+        {item.tag && (
+          <span className="shrink-0 rounded-full bg-amber/15 px-2 py-0.5 text-[9px] font-bold text-[#a86b06]">
+            {item.tag}
+          </span>
+        )}
+      </div>
+
+      <p className="text-xs leading-relaxed text-ink-soft">{item.desc}</p>
+      {item.lunch && !item.available && <p className="text-xs text-berry">{item.lunch.unavailableReason || 'Lunch is currently unavailable.'}</p>}
+
+      <div className="mt-auto flex items-center justify-between gap-2 pt-1">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[15px] font-bold">{rupee(item.price)}</span>
+          <span className="flex items-center gap-0.5 text-[11px] font-semibold text-ink-soft">
+            <Icon name="star" className="h-3 w-3 fill-amber text-amber" />
+            {item.lunch ? 'Lunch' : item.rating}
+          </span>
         </div>
+        {!item.available ? (
+          <span className="text-[11px] font-bold text-berry">Unavailable</span>
+        ) : line ? (
+          <QtyControl
+            qty={line.qty}
+            onChange={(q) => line && setQty(line.key, q)}
+            size="sm"
+          />
+        ) : (
+          <button
+            onClick={() => { if (item.id === CHAPATI_BHAJI_ID) { select(item); go('details') } else add(item) }}
+            className="flex items-center gap-1 rounded-full bg-tangerine-soft px-3 py-1.5 text-xs font-bold text-tangerine-dark active:scale-95"
+          >
+            <Icon name="plus" className="h-3.5 w-3.5" /> {item.id === CHAPATI_BHAJI_ID ? 'Choose sabji' : 'Add'}
+          </button>
+        )}
       </div>
     </div>
   )
+}
+
+function LunchNotice() {
+  const { lunch, lunchError, refresh } = useStore()
+  if (lunch) return lunchError ? <p role="alert" className="mx-5 mt-4 text-sm text-berry">{lunchError} <button className="font-bold" onClick={() => { void refresh() }}>Refresh lunch</button></p> : null
+  return <section aria-label="Today’s lunch" className="mx-5 mt-4 rounded-3xl bg-card p-4 shadow-sm">
+    <h2 className="font-display font-bold">Today’s lunch</h2>
+    <p className="mt-2 text-sm">Chapati Bhaji · Thali</p>
+    <p role={lunchError ? 'alert' : 'status'} className="mt-1 text-xs text-ink-soft">{lunchError || 'Loading lunch availability…'}</p>
+    {lunchError && <button className="mt-2 text-xs font-bold text-tangerine" onClick={() => { void refresh() }}>Retry lunch menu</button>}
+  </section>
 }
 
 function HomeScreen() {
   const { go, user, menu: MENU, orders, selectOrder, notifications, menuLoading, menuError, refresh, setMenuCategory } = useStore()
   const firstName = user?.name ? user.name.split(' ')[0] : 'Student'
   const liveOrder = orders.find(o => !['Completed', 'Picked Up', 'Cancelled'].includes(o.status))
-  const popular = [...MENU.filter(m => m.tag), ...MENU.filter(m => !m.tag)].slice(0, 4)
+  const catalogue = MENU.filter(item => !item.lunch)
+  const popular = [...catalogue.filter(m => m.tag), ...catalogue.filter(m => !m.tag)].slice(0, 4)
   return (
     <Screen>
       <div className="flex items-center justify-between px-5 pb-1 pt-1">
@@ -1092,6 +1085,11 @@ function HomeScreen() {
         <StatusBadge status={liveOrder.status} />
       </button>}
 
+      <LunchNotice />
+      {MENU.some(item => item.lunch) && <section aria-label="Today’s lunch" className="mt-5 px-5">
+        <h2 className="mb-3 font-display text-lg font-bold">Today’s lunch</h2>
+        <div className="flex flex-col gap-3">{MENU.filter(item => item.lunch).map(item => <FoodCardWide key={item.id} item={item} />)}</div>
+      </section>}
       {/* Categories quick */}
       <div className="mt-5 grid grid-cols-4 gap-2 px-5">
         {[
@@ -1171,6 +1169,7 @@ function MenuScreen() {
           <button onClick={() => setQuery('')} className="text-ink-soft text-lg leading-none">×</button>
         )}
       </div>
+      <LunchNotice />
       <div className="mt-3">
         <CategoryTabs value={cat} onChange={setCat} />
       </div>
@@ -1196,81 +1195,66 @@ function MenuScreen() {
 function DetailsScreen() {
   const { selected, go, add, cart, setQty } = useStore()
   const item = selected
-  const line = cart.find((l) => l.item.id === item?.id)
-  const [qty, setLocalQty] = useState(line?.qty ?? 1)
+  const [sabjiChoice, setSabjiChoice] = useState('')
+  const line = cart.find((l) => l.key === (item ? lunchLineKey(item, sabjiChoice) : ''))
+  const [qty, setLocalQty] = useState(1)
   if (!item) return <Screen><TopBar title="Food details" onBack={() => go('menu')} /><EmptyState emoji="🍽️" title="Choose an item" body="Browse the menu to see food details." cta="Open menu" onCta={() => go('menu')} /></Screen>
   return (
     <Screen nav={false}>
-      <div className="relative">
-        <div className="relative h-64 w-full overflow-hidden bg-paper">
-          <FoodImage
-            src={item.photo}
-            alt={item.name}
-            className={`h-full w-full object-cover ${item.available ? '' : 'grayscale'}`}
-          />
-          <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-paper to-transparent" />
-        </div>
-        <button
-          onClick={() => go('menu')}
-          className="absolute left-5 top-2 grid h-10 w-10 place-items-center rounded-full bg-card shadow-md"
-        >
-          <Icon name="back" className="h-5 w-5" />
-        </button>
-      </div>
+      <TopBar
+        title={item.name}
+        onBack={() => go('menu')}
+        right={<span className="font-mono text-base font-bold">{rupee(item.price)}</span>}
+      />
 
-      <div className="-mt-4 px-5">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="mb-1 flex items-center gap-2">
-              <VegDot veg={item.veg} />
-              {item.tag && (
-                <span className="rounded-full bg-amber/15 px-2 py-0.5 text-[10px] font-bold text-[#a86b06]">
-                  {item.tag}
-                </span>
-              )}
+      <div className="px-5 pb-2">
+        <div className="rounded-3xl bg-card p-4 shadow-sm">
+          <div className="mb-3 flex items-center gap-2">
+            <VegDot veg={item.veg} />
+            {item.tag && (
+              <span className="rounded-full bg-amber/15 px-2 py-0.5 text-[10px] font-bold text-[#a86b06]">
+                {item.tag}
+              </span>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <div className="flex items-center gap-1.5 rounded-full bg-paper px-3 py-1.5 text-xs font-semibold shadow-sm">
+              <Icon name="star" className="h-3.5 w-3.5 fill-amber text-amber" />
+              {item.lunch ? 'Today’s lunch' : `${item.rating} rating`}
             </div>
-            <h1 className="font-display text-2xl font-extrabold leading-tight">
-              {item.name}
-            </h1>
+            <div className="flex items-center gap-1.5 rounded-full bg-paper px-3 py-1.5 text-xs font-semibold shadow-sm">
+              <Icon name="clock" className="h-3.5 w-3.5 text-tangerine" />~
+              {item.prepMins} min
+            </div>
+            <div className="flex items-center gap-1.5 rounded-full bg-paper px-3 py-1.5 text-xs font-semibold shadow-sm">
+              🔥 {item.calories == null ? 'Nutrition unavailable' : item.calories + ' kcal'}
+            </div>
           </div>
-          <span className="font-mono text-2xl font-bold">
-            {rupee(item.price)}
-          </span>
+
+          <p className="mt-4 text-sm leading-relaxed text-ink-soft">{item.desc}</p>
+          {item.id === CHAPATI_BHAJI_ID && <fieldset className="mt-4">
+            <legend className="text-sm font-bold">Choose 1 sabji (required)</legend>
+            {item.lunch?.sabjiOptions.map(sabji => <label key={sabji} className="mt-2 flex cursor-pointer items-center gap-3 rounded-2xl border border-line p-3 text-sm">
+              <input type="radio" name="lunch-sabji" value={sabji} checked={sabjiChoice === sabji} onChange={() => setSabjiChoice(sabji)} disabled={!item.available} />{sabji}
+            </label>)}
+            {(!sabjiChoice || !item.lunch?.sabjiOptions.includes(sabjiChoice)) && <p className="mt-2 text-xs text-ink-soft">Select one of today’s available sabjis before adding.</p>}
+          </fieldset>}
+          {item.lunch && item.id !== CHAPATI_BHAJI_ID && <ul className="mt-3 list-inside list-disc text-sm text-ink-soft">{item.lunch.contents.map(content => <li key={content}>{content}</li>)}</ul>}
         </div>
 
-        <div className="mt-3 flex gap-2">
-          <div className="flex items-center gap-1.5 rounded-full bg-card px-3 py-1.5 text-xs font-semibold shadow-sm">
-            <Icon name="star" className="h-3.5 w-3.5 fill-amber text-amber" />
-            {item.rating} rating
-          </div>
-          <div className="flex items-center gap-1.5 rounded-full bg-card px-3 py-1.5 text-xs font-semibold shadow-sm">
-            <Icon name="clock" className="h-3.5 w-3.5 text-tangerine" />~
-            {item.prepMins} min
-          </div>
-          <div className="flex items-center gap-1.5 rounded-full bg-card px-3 py-1.5 text-xs font-semibold shadow-sm">
-            🔥 {item.calories == null ? 'Nutrition unavailable' : item.calories + ' kcal'}
-          </div>
-        </div>
-
-        <p className="mt-4 text-sm leading-relaxed text-ink-soft">{item.desc}</p>
-        <FoodPhotoCredits url={item.photoCredits} />
-
-        {item.available ? (
-          <>
-          </>
-        ) : (
+        {item.available ? null : (
           <div className="mt-6 rounded-2xl border border-berry-soft bg-berry-soft p-4 text-center">
             <p className="font-display font-bold text-berry">
               Currently unavailable
             </p>
             <p className="mt-1 text-xs text-berry/80">
-              This item is out of stock. Please check the menu again later.
+              {item.lunch?.unavailableReason || 'This item is out of stock. Please check the menu again later.'}
             </p>
           </div>
         )}
       </div>
 
-      {/* Sticky add bar */}
       <div className="sticky bottom-0 mt-6 flex items-center gap-3 border-t border-line bg-paper/95 px-5 py-4 backdrop-blur">
         {item.available ? (
           <>
@@ -1278,10 +1262,10 @@ function DetailsScreen() {
             <div className="flex-1">
               <Button
                 full
+                disabled={item.id === CHAPATI_BHAJI_ID && (!sabjiChoice || !item.lunch?.sabjiOptions.includes(sabjiChoice))}
                 onClick={() => {
-                  if (line) setQty(item.id, qty)
-                  else add(item, qty)
-                  go('cart')
+                  if (line) { setQty(line.key, qty); go('cart') }
+                  else if (add(item, qty, sabjiChoice || undefined)) go('cart')
                 }}
               >
                 Add {qty} · {rupee(item.price * qty)}
@@ -1301,14 +1285,7 @@ function DetailsScreen() {
 function CartItemRow({ line }: { line: CartLine }) {
   const { setQty } = useStore()
   return (
-    <div className="flex items-center gap-3 rounded-3xl bg-card p-3 shadow-sm">
-      <div className="h-16 w-16 shrink-0 overflow-hidden rounded-2xl bg-paper">
-        <FoodImage
-          src={line.item.photo}
-          alt={line.item.name}
-          className="h-full w-full object-cover"
-        />
-      </div>
+    <div className="flex items-center justify-between gap-3 rounded-3xl bg-card p-3 shadow-sm">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <VegDot veg={line.item.veg} />
@@ -1316,11 +1293,12 @@ function CartItemRow({ line }: { line: CartLine }) {
             {line.item.name}
           </h3>
         </div>
+        {line.item.lunch && <p className="mt-1 text-xs text-ink-soft">{lunchContents(line.item, line.sabjiChoice).join(' · ')}<br />{line.item.lunch.date} · Lunch</p>}
         <p className="mt-0.5 font-mono text-sm font-bold text-tangerine-dark">
           {rupee(line.item.price * line.qty)}
         </p>
       </div>
-      <QtyControl qty={line.qty} onChange={(q) => setQty(line.item.id, q)} size="sm" />
+      <QtyControl qty={line.qty} onChange={(q) => setQty(line.key, q)} size="sm" />
     </div>
   )
 }
@@ -1355,11 +1333,13 @@ function EmptyState({
 }
 
 function CartScreen() {
-  const { cart, cartTotal, go } = useStore()
+  const { cart, cartTotal, go, lunch, lunchError, refresh } = useStore()
+  const lunchProblem = lunchCartError(cart, lunchError ? null : lunch)
   const total = cartTotal
   return (
     <Screen>
       <TopBar title="Your Cart" subtitle={`${cart.length} item${cart.length !== 1 ? 's' : ''} · Main Block`} />
+      {lunchProblem && <div role="alert" className="mx-5 mb-4 rounded-2xl bg-berry-soft p-4 text-sm text-berry">{lunchProblem}<button className="ml-2 font-bold" onClick={() => { void refresh() }}>Refresh menu</button></div>}
       {cart.length === 0 ? (
         <EmptyState
           emoji="🛒"
@@ -1372,7 +1352,7 @@ function CartScreen() {
         <>
           <div className="flex flex-col gap-3 px-5">
             {cart.map((l) => (
-              <CartItemRow key={l.item.id} line={l} />
+              <CartItemRow key={l.key} line={l} />
             ))}
           </div>
 
@@ -1394,7 +1374,7 @@ function CartScreen() {
             <p className="font-mono text-lg font-bold">{rupee(total)}</p>
           </div>
           <div className="flex-1">
-            <Button full onClick={() => go('checkout')}>
+            <Button full disabled={Boolean(lunchProblem)} onClick={() => go('checkout')}>
               Checkout →
             </Button>
           </div>
@@ -1452,6 +1432,10 @@ function CheckoutScreen() {
           </div>
         )}
 
+        <div className="mb-5 rounded-3xl bg-card p-4 shadow-sm">
+          <h3 className="font-display text-sm font-bold">Your items</h3>
+          {cart.map(line => <div key={line.key} className="mt-3 text-sm"><p className="font-bold">{line.qty}× {line.item.name} · {rupee(line.item.price * line.qty)}</p>{line.item.lunch && <p className="mt-1 text-xs text-ink-soft">{lunchContents(line.item, line.sabjiChoice).join(' · ')} · {line.item.lunch.date} Lunch</p>}</div>)}
+        </div>
         {/* Pickup */}
         <h3 className="font-display text-sm font-bold">Pickup details</h3>
         <div className="mt-2 rounded-3xl bg-card p-4 shadow-sm">
@@ -1701,7 +1685,7 @@ function OrderCard({ order }: { order: PastOrder }) {
         <StatusBadge status={order.status === 'Preparing' ? 'Preparing' : order.status} />
       </div>
       <p className="mt-2 truncate text-sm text-ink-soft">
-        {order.items.map((i) => `${i.qty}× ${i.name}`).join(', ')}
+        {order.items.map((i) => `${i.qty}× ${i.name}${i.sabjiChoice ? ` (${i.sabjiChoice})` : ''}`).join(', ')}
       </p>
       <div className="mt-3 flex items-center justify-between border-t border-dashed border-line pt-3">
         <span className="text-xs text-ink-soft">{orderDate(order)}</span>
@@ -1769,7 +1753,7 @@ function HistoryScreen() {
 }
 
 function OrderDetailsScreen() {
-  const { go, order: o, menu: MENU } = useStore()
+  const { go, order: o, showToast, refresh } = useStore()
   if (!o) return <Screen><TopBar title="Order details" /><EmptyState emoji="🧾" title="Select an order" body="Choose an order from Your Orders." cta="Your orders" onCta={() => go('history')} /></Screen>
   return (
     <Screen nav={false}>
@@ -1783,24 +1767,20 @@ function OrderDetailsScreen() {
         <div className="rounded-3xl bg-card p-5 shadow-sm">
           <h3 className="font-display text-sm font-bold">Items</h3>
           <div className="mt-3 flex flex-col gap-3">
-            {o.items.map((it) => {
-              const m = MENU.find((x) => x.id === it.id)
-              return (
-                <div key={it.name} className="flex items-center gap-3">
-                  <div className="h-12 w-12 overflow-hidden rounded-xl bg-paper">
-                    <FoodImage src={it.photo || m?.photo} alt={it.name} className="h-full w-full object-cover" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm font-bold">{it.name}</p>
-                    <p className="text-xs text-ink-soft">Qty {it.qty}</p>
-                    <FoodPhotoCredits url={it.photoCredits || (!it.photo ? m?.photoCredits : undefined)} />
-                  </div>
-                  <span className="font-mono text-sm font-semibold">
-                    {rupee(it.price * it.qty)}
-                  </span>
+            {o.items.map((it, index) => (
+              <div key={`${it.id}-${index}`} className="flex items-center justify-between gap-3 rounded-2xl bg-paper px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-bold">{it.name}</p>
+                  <p className="text-xs text-ink-soft">Qty {it.qty}</p>
+                  {it.sabjiChoice && <p className="mt-1 text-xs text-ink-soft">Sabji: {it.sabjiChoice}</p>}
+                  {it.contents?.length ? <p className="mt-1 text-xs text-ink-soft">{it.contents.join(' · ')}</p> : null}
+                  {it.mealDate && <p className="mt-1 text-xs text-ink-soft">{it.mealDate} · {it.mealType}</p>}
                 </div>
-              )
-            })}
+                <span className="font-mono text-sm font-semibold">
+                  {rupee(it.price * it.qty)}
+                </span>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -1832,7 +1812,7 @@ function OrderDetailsScreen() {
         </div>
 
         <div className="mt-5 flex gap-3">
-          <Button variant="ghost" full onClick={() => go('menu')}>
+          <Button variant="ghost" full onClick={() => { void refresh(); if (o.items.some(item => isLunchItem(item.id))) showToast('Choose today’s lunch and sabji again; past meal contents are preserved.'); go('menu') }}>
             Reorder
           </Button>
 
@@ -2086,6 +2066,8 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [menuLoading, setMenuLoading] = useState(false)
   const [menuError, setMenuError] = useState<string | null>(null)
+  const [lunch, setLunch] = useState<StudentLunchMenu | null>(null)
+  const [lunchError, setLunchError] = useState<string | null>(null)
   const [menuCategory, setMenuCategory] = useState<Category>('All')
   const [cart, setCart] = useState<CartLine[]>([])
   const [selected, setSelected] = useState<MenuItem | null>(null)
@@ -2099,7 +2081,7 @@ export default function App() {
   const userRef = useRef(user)
   userRef.current = user
   const showToast = (msg: string) => { if(toastTimer.current) clearTimeout(toastTimer.current); setToast(msg); toastTimer.current = setTimeout(() => setToast(null), 3500) }
-  const clearSession = () => { sessionVersion.current++; refreshInFlight.current = null; menuLoaded.current = false; setUser(null); setMenu([]); setOrders([]); setOrder(null); setNotifications([]); setCart([]); setSelected(null); setError(null); setMenuError(null); setMenuLoading(false); setMenuCategory('All'); setBanner(null); setScreen('login'); setChecking(false); setLoading(false) }
+  const clearSession = () => { sessionVersion.current++; refreshInFlight.current = null; menuLoaded.current = false; setUser(null); setMenu([]); setLunch(null); setLunchError(null); setOrders([]); setOrder(null); setNotifications([]); setCart([]); setSelected(null); setError(null); setMenuError(null); setMenuLoading(false); setMenuCategory('All'); setBanner(null); setScreen('login'); setChecking(false); setLoading(false) }
   useEffect(() => {
     const expire = () => { const wasSignedIn = Boolean(userRef.current); clearSession(); if (wasSignedIn) showToast('Your session expired. Please sign in again.') }
     window.addEventListener(STUDENT_SESSION_EXPIRED, expire)
@@ -2121,19 +2103,34 @@ export default function App() {
       if (!Array.isArray(items)) throw new Error('The canteen returned an invalid menu. Please retry.')
       if (!current()) return
       menuLoaded.current = true
-      setMenu(items)
+      setMenu(previous => [...items, ...previous.filter(item => item.lunch)])
       setMenuError(null)
-      setCart(prev => prev.flatMap(line => { const next = items.find(item => item.id === line.item.id); return next ? [{ ...line, item: next }] : [] }))
-      setSelected(prev => prev ? items.find(item => item.id === prev.id) ?? { ...prev, available: false } : null)
+      setCart(prev => prev.flatMap(line => { if (line.item.lunch) return [line]; const next = items.find(item => item.id === line.item.id); return next ? [{ ...line, item: next }] : [] }))
+      setSelected(prev => prev?.lunch ? prev : prev ? items.find(item => item.id === prev.id) ?? { ...prev, available: false } : null)
     }).catch(cause => {
       if (current()) setMenuError(cause instanceof Error ? cause.message : 'Cannot load the menu. Please retry.')
       throw cause
     }).finally(() => { if (current()) setMenuLoading(false) })
+    const lunchRequest = Promise.resolve().then(() => apiClient.getLunchMenu()).then(next => {
+      if (!next || !Array.isArray(next.options) || !Array.isArray(next.contents) || !Array.isArray(next.sabjiOptions)) throw new Error('The canteen returned an invalid lunch menu.')
+      if (!current()) return
+      setLunch(next); setLunchError(null)
+      const meals = lunchItems(next)
+      setMenu(previous => [...previous.filter(item => !isLunchItem(item.id)), ...meals])
+      setSelected(previous => previous?.lunch ? meals.find(item => item.id === previous.id) ?? { ...previous, available: false } : previous)
+    }).catch(cause => {
+      if (current()) {
+        setLunchError(cause instanceof Error ? cause.message : 'Cannot load lunch. Please retry.')
+        setMenu(previous => previous.map(item => item.lunch ? { ...item, available: false, lunch: { ...item.lunch, unavailableReason: 'Lunch could not be refreshed. Please retry.' } } : item))
+        setSelected(previous => previous?.lunch ? { ...previous, available: false } : previous)
+      }
+      throw cause
+    })
     try {
       const results = await Promise.allSettled([menuRequest,
         Promise.resolve().then(() => apiClient.getOrders()),
         Promise.resolve().then(() => apiClient.getNotifications()),
-        Promise.resolve().then(() => apiClient.getMe())])
+        Promise.resolve().then(() => apiClient.getMe()), lunchRequest])
       if (!current()) return
       const [, ordersResult, notificationsResult, userResult] = results
       if (ordersResult.status === 'fulfilled') { setOrders(ordersResult.value); setOrder(prev => prev ? ordersResult.value.find(next => next.orderId === prev.orderId) ?? prev : null) }
@@ -2174,11 +2171,20 @@ export default function App() {
     if (!user || !cart.length) throw new Error('Sign in and add food before ordering.')
     if (cart.some(line => !line.item.available)) throw new Error('An item in your cart is currently unavailable. Remove it before ordering.')
     const version = sessionVersion.current
-    const items = cart.map(line => ({ id: line.item.id, qty: line.qty }))
     const method = paymentMethod === 'wallet' ? 'wallet' : 'razorpay'
-    const key = checkoutIntent(items, method)
     orderSubmitLock.current = true
     try {
+      if (cart.some(line => line.item.lunch)) {
+        const fresh = await apiClient.getLunchMenu()
+        if (version !== sessionVersion.current) throw new Error('Your session changed. Sign in to check Your Orders.')
+        setLunch(fresh); setLunchError(null)
+        const meals = lunchItems(fresh)
+        setMenu(previous => [...previous.filter(item => !isLunchItem(item.id)), ...meals])
+        const problem = lunchCartError(cart, fresh)
+        if (problem) throw new Error(problem)
+      }
+      const items = cart.map(lunchOrderInput)
+      const key = checkoutIntent(items, method)
       const next = await apiClient.createOrder(items, method, key)
       if (version !== sessionVersion.current) throw new Error('Your session changed. Sign in to check Your Orders.')
       rememberOrder(next)
@@ -2190,10 +2196,20 @@ export default function App() {
   const pickup = async () => { if(!order) return; const version = sessionVersion.current; const next = await apiClient.pickupOrder(order.orderId); if(version !== sessionVersion.current) throw new Error('Your session changed. Sign in to check Your Orders.'); setOrder(next); await refresh() }
   const markRead = async () => { const version = sessionVersion.current; await apiClient.markAllNotificationsRead(); if(version === sessionVersion.current) setNotifications(prev => prev.map(n => ({...n,unread:false}))) }
   const store: Store = {
-    screen, user, menu, orders, order, notifications, loading, error, menuLoading, menuError, menuCategory, setMenuCategory, refresh, selectOrder: setOrder, submitOrder, completePayment, pickup, markRead,
+    screen, user, menu, orders, order, notifications, loading, error, menuLoading, menuError, lunch, lunchError, menuCategory, setMenuCategory, refresh, selectOrder: setOrder, submitOrder, completePayment, pickup, markRead,
     go: next => { if(!user && next !== 'login') { setScreen('login'); return }; setScreen(next) }, loginUser, registerUser, logoutUser,
-    cart, add: (item, qty = 1) => { const current = menu.find(next => next.id === item.id); if(!current?.available) { showToast('This item is currently unavailable'); return }; setCart(prev => { const old = prev.find(l => l.item.id === current.id); return old ? prev.map(l => l.item.id === current.id ? {...l,qty:l.qty+qty} : l) : [...prev,{item:current,qty}] }); showToast(`${current.name} added`) },
-    setQty: (id,qty) => setCart(prev => qty <= 0 ? prev.filter(l => l.item.id !== id) : prev.map(l => l.item.id === id ? {...l,qty} : l)), clear: () => setCart([]),
+    cart, add: (item, qty = 1, sabjiChoice) => {
+      const current = menu.find(next => next.id === item.id)
+      if (!current?.available || !Number.isInteger(qty) || qty < 1) { showToast('This item is currently unavailable'); return false }
+      if (current.lunch) {
+        const problem = lunchCartError([{ item, sabjiChoice }], lunchError ? null : lunch)
+        if (problem) { showToast(problem); return false }
+      }
+      const key = lunchLineKey(current, sabjiChoice)
+      setCart(previous => { const old = previous.find(line => line.key === key); return old ? previous.map(line => line.key === key ? { ...line, qty: line.qty + qty } : line) : [...previous, { key, item: current, qty, ...(sabjiChoice ? { sabjiChoice } : {}) }] })
+      showToast(`${current.name} added`); return true
+    },
+    setQty: (key, qty) => setCart(previous => qty <= 0 ? previous.filter(line => line.key !== key) : previous.map(line => line.key === key ? { ...line, qty } : line)), clear: () => setCart([]),
     cartCount: cart.reduce((sum,l) => sum+l.qty,0), cartTotal: cart.reduce((sum,l) => sum+l.qty*l.item.price,0), selected, select: setSelected, banner, setBanner, toast, showToast,
   }
   const screens: Record<Screen, ReactNode> = { login:<LoginScreen />, home:<HomeScreen />, menu:<MenuScreen />, details:<DetailsScreen />, cart:<CartScreen />, checkout:<CheckoutScreen />, confirm:<ConfirmScreen />, tracking:<TrackingScreen />, ready:<ReadyScreen />, history:<HistoryScreen />, orderDetails:<OrderDetailsScreen />, notifications:<NotificationsScreen />, profile:<ProfileScreen />, wallet:<WalletScreen /> }

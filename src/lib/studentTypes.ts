@@ -5,18 +5,28 @@ export interface UserProfile {
 }
 export interface AuthResponse { success: boolean; message: string; user?: UserProfile; token?: string | null }
 export interface RegisterInput { rollNumber: string; name: string; passcode: string; branch?: string; phone?: string; email?: string }
+export interface StudentLunchMenu {
+  date: string; day: string; mealType: 'lunch'; available: boolean;
+  unavailableReason: string | null; mealRevision: string | null;
+  contents: string[]; sabjiOptions: string[];
+  options: { id: string; name: string; price: number; available?: boolean; unavailableReason?: string | null }[];
+}
+export interface StudentOrderItemInput {
+  id: string; qty: number; customizations?: string[]; sabjiChoice?: string; mealRevision?: string;
+}
 export interface StudentMenuItem {
   id: string; name: string; desc: string; price: number; rating: number; prepMins: number;
   category: 'Snacks' | 'Meals' | 'Beverages' | 'Desserts' | 'Quick Bites'; veg: boolean; available: boolean; tag?: string;
   emoji: string; photo: string; photoCredits?: string; imageId?: string | null; calories?: number;
   customizations?: { name: string; price: number }[];
+  lunch?: { date: string; revision: string | null; contents: string[]; sabjiOptions: string[]; unavailableReason: string | null };
 }
 export type StudentOrderStatus = 'Payment Pending' | 'Queued' | 'Preparing' | 'Ready' | 'Picked Up' | 'Completed' | 'Delayed' | 'Cancelled'
 export interface GatewayCheckout { provider: 'razorpay'; keyId: string; providerOrderId: string; amountPaise: number; currency: string }
 export interface WalletTopup { id: number; amount: number; currency: string; state: string; checkout: GatewayCheckout | null; createdAt: string; walletBalance: number }
 export interface StudentOrder {
   id: string; orderId: number; number: string; studentId: string;
-  items: { id: string; name: string; qty: number; price: number; photo?: string; photoCredits?: string; customizations?: string[] }[];
+  items: { id: string; name: string; qty: number; price: number; photo?: string; photoCredits?: string; customizations?: string[]; contents?: string[]; mealDate?: string; mealType?: string; sabjiChoice?: string; mealRevision?: string }[];
   itemTotal: number; packagingFee: number; gst: number; total: number; paymentMethod: string;
   status: StudentOrderStatus; payment: 'Pending' | 'Paid' | 'Failed' | 'Refunded'; pickupCounter: string; pickupToken: string;
   queuePosition: number; prepTimeMinutes: number; estimatedReadyAt?: string; date: string;

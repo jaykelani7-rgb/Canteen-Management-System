@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Literal, Any, Dict, List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from models import DayOfWeek, MealType, OrderStatusEnum, PaymentStatusEnum
 
 
@@ -24,6 +24,27 @@ class WeeklyMenuItemCreate(BaseModel):
         description="Array of food items served for this meal",
         examples=[["Masala Dosa", "Sambar", "Coconut Chutney", "Filter Coffee"]],
     )
+    # None means omitted by older/OCR clients: retain the existing slot setting.
+    sabji_options: Optional[List[str]] = Field(default=None, max_length=2)
+    ordering_enabled: Optional[bool] = None
+
+    @field_validator("items", "sabji_options")
+    @classmethod
+    def clean_meal_items(cls, value, info):
+        if value is None:
+            return value
+        if any(not name.strip() or len(name.strip()) > 200 for name in value):
+            raise ValueError("Meal items must have nonempty names of at most 200 characters")
+        cleaned = [name.strip() for name in value]
+        if info.field_name == "sabji_options" and len({name.casefold() for name in cleaned}) != len(cleaned):
+            raise ValueError("Meal items must be distinct")
+        return cleaned
+
+    @model_validator(mode="after")
+    def lunch_configuration_only(self):
+        if self.meal_type != MealType.LUNCH and (self.ordering_enabled or self.sabji_options):
+            raise ValueError("Lunch ordering settings apply only to lunch")
+        return self
 
 
 class WeeklyMenuBatchUpload(BaseModel):
@@ -39,6 +60,8 @@ class WeeklyMenuItemResponse(BaseModel):
     day: str
     meal_type: str
     items: List[str]
+    sabji_options: List[str] = Field(default_factory=list)
+    ordering_enabled: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -286,6 +309,8 @@ class OrderItemInput(BaseModel):
     price: Optional[float] = Field(default=None, ge=0)
     customizations: List[str] = Field(default_factory=list, max_length=10)
     photo: Optional[str] = Field(default=None, max_length=2000)
+    sabjiChoice: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    mealRevision: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class CreateOrderRequest(BaseModel):

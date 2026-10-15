@@ -40,7 +40,15 @@ async def order_response(db, order):
 async def create_order(db, student_id, payload, idempotency_key):
     if not 16 <= len(idempotency_key) <= 128 or not all(c.isalnum() or c in "-_:." for c in idempotency_key):
         raise HTTPException(422, "A valid Idempotency-Key is required")
-    canonical = {"items": sorted([{"id": i.id, "qty": i.qty, "customizations": sorted(i.customizations)} for i in payload.items], key=lambda i: (i["id"], str(i["customizations"]))), "paymentMethod": payload.paymentMethod, "instructions": payload.specialInstructions or ""}
+    from lunch_service import LUNCH_IDS, current_lunch, lunch_order_snapshot
+    canonical_items=[]
+    for item in payload.items:
+        entry={"id":item.id,"qty":item.qty,"customizations":sorted(item.customizations)}
+        # Keep legacy catalogue fingerprints byte-compatible for old checkout retries.
+        if item.id in LUNCH_IDS or item.sabjiChoice is not None or item.mealRevision is not None:
+            entry.update(sabjiChoice=item.sabjiChoice,mealRevision=item.mealRevision)
+        canonical_items.append(entry)
+    canonical = {"items": sorted(canonical_items, key=lambda i: (i["id"], str(i["customizations"]), i.get("sabjiChoice") or "", i.get("mealRevision") or "")), "paymentMethod": payload.paymentMethod, "instructions": payload.specialInstructions or ""}
     fingerprint = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     student = await lock_student(db, student_id)
     existing = (await db.execute(select(Order).where(Order.student_id == student_id, Order.idempotency_key == idempotency_key))).scalar_one_or_none()
@@ -51,12 +59,21 @@ async def create_order(db, student_id, payload, idempotency_key):
     gateway = payload.paymentMethod != "wallet"
     if gateway and not checkout_enabled():
         raise HTTPException(503, "Online payments are not configured; no payment was taken")
-    catalogue = (await db.execute(select(FoodItem).where(FoodItem.id.in_([i.id for i in payload.items])).with_for_update(read=True))).scalars().all()
+    catalogue = (await db.execute(select(FoodItem).where(FoodItem.id.in_([i.id for i in payload.items])).order_by(FoodItem.id).with_for_update(read=True))).scalars().all()
     by_id = {i.id: i for i in catalogue}
     total = Decimal("0.00")
     formatted = []
     prep = 5
+    lunch = await current_lunch(db, lock=True) if any(item.id in LUNCH_IDS for item in payload.items) else None
     for request in payload.items:
+        if request.id in LUNCH_IDS:
+            snapshot=lunch_order_snapshot(request,lunch)
+            total += money(snapshot["price"]) * request.qty
+            formatted.append(snapshot)
+            prep=max(prep,7)
+            continue
+        if request.sabjiChoice is not None or request.mealRevision is not None:
+            raise HTTPException(422, "Lunch selections are not valid for an a la carte item")
         item = by_id.get(request.id)
         if not item or not item.is_available or not item.image_id or not item.image_confirmed:
             raise HTTPException(409, "An item is unavailable; refresh the menu")

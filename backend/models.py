@@ -86,6 +86,8 @@ class WeeklyMenu(Base):
     day = Column(String(20), nullable=False, index=True)  # e.g., 'Monday', 'Tuesday'
     meal_type = Column(String(20), nullable=False, index=True)  # e.g., 'breakfast', 'lunch'
     items = Column(StringListType, nullable=False, default=list)  # Array of string items
+    sabji_options = Column(JSON, nullable=False, default=list, server_default=text("'[]'"))
+    ordering_enabled = Column(Boolean, nullable=False, default=False, server_default=text("false"))
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
@@ -102,6 +104,8 @@ class WeeklyMenu(Base):
             "day": self.day,
             "meal_type": self.meal_type,
             "items": self.items or [],
+            "sabji_options": self.sabji_options or [],
+            "ordering_enabled": bool(self.ordering_enabled),
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

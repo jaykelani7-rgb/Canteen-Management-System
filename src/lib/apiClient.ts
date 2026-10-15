@@ -1,5 +1,5 @@
 import { apiUrl } from './apiConfig'
-import type { AuthResponse, RegisterInput, UserProfile, StudentMenuItem, StudentOrder, OrderTracking, StudentNotification, WalletTransaction, WalletTopup } from './studentTypes'
+import type { AuthResponse, RegisterInput, UserProfile, StudentMenuItem, StudentOrder, OrderTracking, StudentNotification, WalletTransaction, WalletTopup, StudentLunchMenu, StudentOrderItemInput } from './studentTypes'
 
 const TOKEN_KEY = 'sco_fastapi_student_token'
 export const usesStudentCookieSession = import.meta.env.VITE_NATIVE_APP !== 'true' && import.meta.env.VITE_AUTH_COOKIE_MODE === 'true'
@@ -88,11 +88,12 @@ export const apiClient = {
     return result
   },
   getMenu: () => request<StudentMenuItem[]>('/menu/items', 'GET', undefined, false),
+  getLunchMenu: () => request<StudentLunchMenu>('/menu/lunch', 'GET', undefined, false),
   getMenuItem: (id: string) => request<StudentMenuItem>(`/menu/items/${encodeURIComponent(id)}`, 'GET', undefined, false),
   getOrders: () => request<StudentOrder[]>('/student/orders'),
   getOrder: (id: number) => request<StudentOrder>(`/student/orders/${id}`),
   getTracking: (id: number) => request<OrderTracking>(`/student/orders/${id}/tracking`),
-  createOrder: (items: { id: string; qty: number }[], paymentMethod: string, idempotencyKey: string) => request<StudentOrder>('/student/orders', 'POST', { items, paymentMethod }, true, { 'Idempotency-Key': idempotencyKey }),
+  createOrder: (items: StudentOrderItemInput[], paymentMethod: string, idempotencyKey: string) => request<StudentOrder>('/student/orders', 'POST', { items, paymentMethod }, true, { 'Idempotency-Key': idempotencyKey }),
   getPaymentsConfig: () => request<{ provider: 'disabled' | 'razorpay'; enabled: boolean }>('/student/payments/config'),
   verifyPayment: (id: number, payment: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string }) => request<StudentOrder>('/student/orders/' + id + '/payment/verify', 'POST', payment),
   pickupOrder: (id: number) => request<StudentOrder>(`/student/orders/${id}/pickup`, 'POST'),

@@ -1,7 +1,7 @@
 from datetime import datetime, time, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Query, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -178,6 +178,14 @@ async def update_order_status(order_id: int, payload: OrderStatusUpdateRequest, 
 # =========================================================================
 # 2. STUDENT / PUBLIC MENU ROUTES (REDIS CACHED)
 # =========================================================================
+@menu_router.get("/lunch", summary="Get current IST lunch bundles and required sabji choices")
+async def get_current_lunch(response: Response, db: AsyncSession = Depends(get_db)):
+    from lunch_service import current_lunch
+    # Availability and date must be current at checkout; never cache a stale serving window.
+    response.headers["Cache-Control"] = "no-store"
+    return await current_lunch(db)
+
+
 @menu_router.get(
     "/today",
     response_model=TodayMenuResponse,
@@ -362,22 +370,47 @@ async def get_ala_carte_items(
 )
 async def upload_weekly_menu(payload:WeeklyMenuBatchUpload,db:AsyncSession=Depends(get_db),admin:AdminUser=Depends(get_current_admin)):
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from lunch_service import validate_lunch_configuration
     insert=pg_insert if db.bind.dialect.name=="postgresql" else sqlite_insert
     entries={(item.day.value,item.meal_type.value):item for item in payload.schedule}
+    values=[]
     if entries:
+        if db.bind.dialect.name == "postgresql":
+            # Serialize admin upserts even for a not-yet-created slot. Existing rows
+            # additionally share their row locks with authoritative lunch checkout.
+            await db.execute(text("SELECT pg_advisory_xact_lock(734526019)"))
+        existing_rows=(await db.execute(select(WeeklyMenu).where(
+            tuple_(WeeklyMenu.day,WeeklyMenu.meal_type).in_(sorted(entries))
+        ).order_by(WeeklyMenu.day,WeeklyMenu.meal_type).with_for_update().execution_options(populate_existing=True))).scalars().all()
+        existing={(row.day,row.meal_type):row for row in existing_rows}
+        for (day,meal),item in sorted(entries.items()):
+            previous=existing.get((day,meal))
+            sabji_options=item.sabji_options if item.sabji_options is not None else list(previous.sabji_options or []) if previous else []
+            enabled=item.ordering_enabled if item.ordering_enabled is not None else bool(previous and previous.ordering_enabled)
+            if meal == MealType.LUNCH.value and item.sabji_options is None and item.ordering_enabled is None:
+                # OCR/older clients replace meal contents without configuring lunch.
+                # Keep inherited choices only while they are valid for the new meal,
+                # including when ordering was already disabled. Never infer new choices.
+                try:
+                    validate_lunch_configuration(item.items,sabji_options,True)
+                except HTTPException:
+                    sabji_options=[]
+                    enabled=False
+            validate_lunch_configuration(item.items,sabji_options,enabled)
+            values.append({"day":day,"meal_type":meal,"items":item.items,
+                           "sabji_options":sabji_options,"ordering_enabled":enabled})
         # Submit every reviewed meal slot in one database round trip. A weekly OCR
         # schedule may contain up to 28 rows; serial upserts can outlive frontend
         # request timeouts when the managed database is waking from inactivity.
-        values=[{"day":day,"meal_type":meal,"items":item.items}
-                for (day,meal),item in sorted(entries.items())]
         statement=insert(WeeklyMenu).values(values)
         await db.execute(statement.on_conflict_do_update(
             index_elements=["day","meal_type"],
-            set_={"items":statement.excluded["items"],"updated_at":datetime.now(timezone.utc)}
+            set_={"items":statement.excluded["items"],"sabji_options":statement.excluded["sabji_options"],
+                  "ordering_enabled":statement.excluded["ordering_enabled"],"updated_at":datetime.now(timezone.utc)}
         ))
     await db.commit()
     await cache_invalidate_prefix("canteen:menu:")
-    return {"status":"success","message":"Weekly menu saved","schedule":[{"day":day,"meal_type":meal,"items":item.items} for (day,meal),item in entries.items()]}
+    return {"status":"success","message":"Weekly menu saved","schedule":values}
 
 
 @admin_router.post(

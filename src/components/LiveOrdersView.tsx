@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { adminOperationsApi, type AdminOrder } from '../lib/adminOperationsApi'
 import PaymentReconciliationPanel from './PaymentReconciliationPanel'
-import type { StudentOrderStatus } from '../lib/studentTypes'
+import type { StudentOrder, StudentOrderStatus } from '../lib/studentTypes'
 
 export interface OrderItem {
   id: string
@@ -9,7 +9,7 @@ export interface OrderItem {
   token_number: string
   student_name: string
   roll_no: string
-  items: { name: string; qty: number; price: number }[]
+  items: StudentOrder['items']
   total_amount: number
   status: StudentOrderStatus
   order_time: string
@@ -176,15 +176,20 @@ export default function LiveOrdersView({ onShowToast }: LiveOrdersViewProps) {
                   {order.items.map((item, idx) => (
                     <div
                       key={idx}
-                      className="flex items-center justify-between text-xs font-semibold text-stone-800"
+                      className="text-xs font-semibold text-stone-800"
                     >
-                      <div className="flex items-center gap-2">
-                        <span className="w-5 h-5 rounded-md bg-[#FAF7F3] border border-[#E5DFD7] text-[10px] font-bold flex items-center justify-center text-stone-600">
-                          {item.qty}x
-                        </span>
-                        <span className="truncate max-w-[180px]">{item.name}</span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="w-5 h-5 rounded-md bg-[#FAF7F3] border border-[#E5DFD7] text-[10px] font-bold flex items-center justify-center text-stone-600">
+                            {item.qty}x
+                          </span>
+                          <span className="truncate max-w-[180px]">{item.name}</span>
+                        </div>
+                        <span className="font-mono text-stone-500">₹{item.price}</span>
                       </div>
-                      <span className="font-mono text-stone-500">₹{item.price}</span>
+                      {item.sabjiChoice && <p className="mt-1 pl-7 text-[#F25C2C]">Sabji: {item.sabjiChoice}</p>}
+                      {!!item.contents?.length && <p className="mt-1 pl-7 text-[11px] font-normal leading-relaxed text-stone-600">Includes: {item.contents.join(' · ')}</p>}
+                      {item.mealDate && <p className="mt-1 pl-7 text-[10px] font-normal text-stone-500">{item.mealDate} · {item.mealType || 'lunch'}</p>}
                     </div>
                   ))}
                 </div>

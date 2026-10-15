@@ -40,7 +40,7 @@ async function foodImageBlob(id: string, signal?: AbortSignal): Promise<Blob> {
     throw new AdminApiError('Cannot reach the image service. Check your connection and retry.', 0)
   } finally { clearTimeout(timeout); signal?.removeEventListener('abort', cancel) }
 }
-export interface WeeklyMeal { day: string; meal_type: 'breakfast' | 'lunch' | 'snacks' | 'dinner'; items: string[] }
+export interface WeeklyMeal { day: string; meal_type: 'breakfast' | 'lunch' | 'snacks' | 'dinner'; items: string[]; sabji_options?: string[]; ordering_enabled?: boolean }
 export interface PaymentReconciliation {
   paymentIntentId: number; orderId: number | null; purpose: 'order' | 'wallet_topup'; state: string;
   amountPaise: number; currency: string; receipt: string; providerOrderId: string | null;

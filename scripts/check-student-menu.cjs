@@ -46,10 +46,10 @@ const meal = { id: 'meal', name: 'Dosa', desc: 'South Dish', category: 'Meals', 
 
 function appHarness(overrides = {}) {
   const runtime = hooks(), user = { id: 'student-a', name: 'Student' };
-  const api = { hasSession: () => false, getMenu: async () => [meal], getOrders: async () => [], getNotifications: async () => [], getMe: async () => ({ success: true, user }), login: async () => ({ success: true, user }), logout: async () => {}, ...overrides };
+  const api = { hasSession: () => false, getMenu: async () => [meal], getLunchMenu: async () => ({ date: '2026-10-15', day: 'Thursday', mealType: 'lunch', available: false, unavailableReason: 'Lunch unconfigured', mealRevision: null, contents: [], sabjiOptions: [], options: [] }), getOrders: async () => [], getNotifications: async () => [], getMe: async () => ({ success: true, user }), login: async () => ({ success: true, user }), logout: async () => {}, ...overrides };
   const app = load('student/src/App.tsx', {
     react: runtime.react, '../../src/lib/apiClient': { apiClient: api, STUDENT_SESSION_EXPIRED: 'expired' },
-    '../../src/lib/paymentCheckout': {}, '../../src/components/FoodImage': { default: function FoodImage() {} },
+    '../../src/lib/paymentCheckout': {}, '../../src/lib/studentLunch': load('src/lib/studentLunch.ts', {}), '../../src/components/FoodImage': { default: function FoodImage() {} },
     '../../src/components/FoodPhotoCredits': { default: function FoodPhotoCredits() {} },
   }, { setTimeout: () => 1, clearTimeout() {}, setInterval: runtime.setInterval, clearInterval: runtime.clearInterval,
     document: { visibilityState: 'visible' }, window: { addEventListener() {}, removeEventListener() {} } }, '\nexport { HomeScreen, MenuScreen };');
