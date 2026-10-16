@@ -52,7 +52,7 @@ function appHarness(overrides = {}) {
     '../../src/lib/paymentCheckout': { checkoutIntent: () => 'lunch-test-key', clearCheckoutIntent() {} }, '../../src/lib/studentLunch': load('src/lib/studentLunch.ts', {}), '../../src/components/FoodImage': { default: function FoodImage() {} },
     '../../src/components/FoodPhotoCredits': { default: function FoodPhotoCredits() {} },
   }, { setTimeout: () => 1, clearTimeout() {}, setInterval: runtime.setInterval, clearInterval: runtime.clearInterval,
-    document: { visibilityState: 'visible' }, window: { addEventListener() {}, removeEventListener() {} } }, '\nexport { HomeScreen, MenuScreen, DetailsScreen, CartScreen, OrderDetailsScreen };');
+    document: { visibilityState: 'visible' }, window: { addEventListener() {}, removeEventListener() {} } }, '\nexport { HomeScreen, MenuScreen, DetailsScreen, CartScreen, OrderDetailsScreen, FoodCardWide };');
   function render() { runtime.begin('App'); runtime.store = app.default().props.value; runtime.commit(); return runtime.store; }
   const mounted = { app, api, runtime, render, login: async () => { await render().loginUser('ROLL', 'PASS'); render(); await tick(); return render(); } };
   render(); return mounted;
@@ -67,7 +67,7 @@ const paneerLunch = { ...lunch, contents: ['3 chapatis','Salad','Paneer','Aloo']
 const alooLunch = { ...paneerLunch, mealRevision: 'rev-aloo', contents: ['3 chapatis','Salad','Aloo'], sabjiOptions: ['Aloo'] };
 const [alooChapati, alooThali] = h.lunchItems(alooLunch);
 const harness = (overrides = {}) => appHarness({ getLunchMenu: async () => structuredClone(lunch), ...overrides });
-function view(app, name) { app.render(); app.runtime.begin(name); return app.app[name](); }
+function view(app, name, props) { app.render(); app.runtime.begin(name); return app.app[name](props); }
 (async () => {
   await check('Backend prices are used without a client price table', () => { assert.equal(chapati.price,45); assert.equal(thali.price,80); assert.equal(h.lunchItems({...lunch,options:[{...lunch.options[0],price:47}]})[0].price,47); });
   await check('Thali contents reflect configured current lunch', () => assert.equal(thali.lunch.contents.join('|'),lunch.contents.join('|')));
@@ -151,8 +151,21 @@ function view(app, name) { app.render(); app.runtime.begin(name); return app.app
   await check('Background refresh preserves old contents and separate meal cart lines', async () => {
     const app=harness(); await app.login(); app.render().add(chapati,1,'Cabbage'); app.render().add(chapati,1,'Potato'); app.api.getLunchMenu=async()=>({...structuredClone(lunch),mealRevision:'rev-b',contents:['New meal'],sabjiOptions:['Peas','Beans']}); await app.render().refresh();const store=app.render(); assert.equal(store.cart.length,2); assert.equal(store.cart[0].item.lunch.revision,'rev-a'); assert.equal(store.cart[0].item.lunch.contents.join('|'),lunch.contents.join('|'));assert.match(h.lunchCartError(store.cart,store.lunch),/changed/);
   });
-  await check('Actual Home and Menu keep both closed lunch cards visible', async () => {
-    const app=harness({getLunchMenu:async()=>({...structuredClone(lunch),available:false,unavailableReason:'Lunch closed'})});await app.login();for(const name of ['HomeScreen','MenuScreen']) {const cards=nodes(view(app,name)).filter(node=>node.type?.name==='FoodCardWide'&&node.props.item.lunch);assert.equal(cards.length,2);assert.ok(cards.every(node=>node.props.item.available===false));}
+  await check('Home removes every meal summary and selector while preserving other content and navigation', async () => {
+    const app=harness({getDinnerMenu:async()=>structuredClone(dinner)});await app.login();const home=view(app,'HomeScreen'),all=nodes(home);
+    assert.equal(all.filter(node=>node.type?.name==='LunchNotice').length,0);
+    assert.equal(all.filter(node=>node.type?.name==='FoodCardWide'&&node.props.item.lunch).length,0);
+    assert.ok(all.some(node=>node.type?.name==='SearchBar'));
+    assert.match(text(home),/Good afternoon.*Hey,.*Student.*Main Block Canteen/);
+    assert.match(text(home),/Snacks.*Meals.*Beverages.*Quick Bites.*Beat the 1 PM rush.*Order ahead.*Popular today.*See all/);
+    assert.doesNotMatch(text(home),/Today.s lunch|Today.s dinner|Chapati Bhaji|Thali|19:30|Lunch closed/);
+    assert.ok(all.some(node=>node.type?.name==='FoodCardWide'&&node.props.item.id===meal.id));
+    all.find(node=>node.type==='button'&&text(node).includes('Meals')).props.onClick();assert.equal(app.render().menuCategory,'Meals');assert.equal(app.render().screen,'menu');
+  });
+  await check('Closed meal cards are hidden from Menu while available catalogue records remain', async () => {
+    const app=harness({getLunchMenu:async()=>({...structuredClone(lunch),available:false,unavailableReason:'Lunch closed'}),getDinnerMenu:async()=>({...structuredClone(dinner),available:false,unavailableReason:'Dinner unconfigured'})});await app.login();
+    const cards=nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide');assert.equal(cards.length,1);assert.equal(cards[0].props.item.id,meal.id);
+    assert.equal(app.render().add(chapati,1,'Potato'),false);assert.equal(app.render().add(dinnerThali),false);assert.equal(app.render().cart.length,0);
   });
   await check('Order details render immutable contents, choice and meal date', async () => {
     const app=harness();await app.login();app.render().selectOrder({id:'old',number:'#1',status:'Completed',payment:'Paid',createdAt:'2026-10-14T07:00:00Z',items:[{id:h.CHAPATI_BHAJI_ID,name:'Chapati Bhaji',qty:1,price:45,contents:['3 chapatis','Salad','Old sabji'],sabjiChoice:'Old sabji',mealDate:'2026-10-14',mealType:'lunch'}],itemTotal:45,packagingFee:0,gst:0,total:45,paymentMethod:'wallet',pickupCounter:'A'}); const page=view(app,'OrderDetailsScreen');assert.match(text(page),/Old sabji/);assert.match(text(page),/3 chapatis.*Salad.*Old sabji/);assert.match(text(page),/2026-10-14.*lunch/);assert.doesNotMatch(text(page),/Cabbage/);
@@ -165,11 +178,40 @@ function view(app, name) { app.render(); app.runtime.begin(name); return app.app
     assert.match(h.mealCartError([{item:dinnerChapati,sabjiChoice:'Potato'}],lunch,dinner),/exactly one/);
     assert.match(h.mealCartError([{item:dinnerThali}],lunch,null),/Dinner could not be verified/);
   });
-  await check('Server current meal selects Dinner and both screens filter only meal bundles', async () => {
-    const app=harness({getDinnerMenu:async()=>structuredClone(dinner)}); await app.login(); assert.equal(app.render().selectedMeal,'dinner');
-    for (const name of ['HomeScreen','MenuScreen']) {const cards=nodes(view(app,name)).filter(node=>node.type?.name==='FoodCardWide'&&node.props.item.lunch);assert.equal(cards.length,2);assert.ok(cards.every(node=>node.props.item.id.startsWith('dinner-')));}
-    app.render().setSelectedMeal('lunch'); await app.render().refresh(); assert.equal(app.render().selectedMeal,'lunch');
-    const menu=nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide'); assert.ok(menu.some(node=>node.props.item.id===meal.id)); assert.ok(menu.filter(node=>node.props.item.lunch).every(node=>node.props.item.id.startsWith('lunch-')));
+  await check('All and Meals show both independently configured periods as regular cards without separate tabs or sections', async () => {
+    const app=harness({getDinnerMenu:async()=>structuredClone(dinner)});await app.login();
+    for(const category of ['All','Meals']) {
+      app.render().setMenuCategory(category);const page=view(app,'MenuScreen'),all=nodes(page),cards=all.filter(node=>node.type?.name==='FoodCardWide');
+      assert.equal(cards.length,5);assert.equal(cards.filter(node=>node.props.item.lunch).length,4);assert.ok(cards.every(node=>node.props.item.category==='Meals'));
+      for(const id of [h.CHAPATI_BHAJI_ID,h.THALI_ID,h.DINNER_CHAPATI_BHAJI_ID,h.DINNER_THALI_ID]) assert.ok(cards.some(node=>node.props.item.id===id));
+      assert.equal(all.filter(node=>node.type?.name==='LunchNotice').length,0);
+      assert.equal(all.filter(node=>node.props?.['aria-label']==='Choose meal period'||node.props?.['aria-label']==='Meal period').length,0);
+      assert.equal(all.filter(node=>node.type==='button'&&['Lunch','Dinner'].includes(text(node).trim())).length,0);
+      assert.doesNotMatch(text(page),/Today.s lunch|Today.s dinner|Chapati Bhaji · Thali/);
+    }
+  });
+  await check('Menu search and other categories include matching bundles without leaking them into unrelated categories', async () => {
+    const snack={...meal,id:'snack',name:'Samosa',category:'Snacks',price:25};const app=harness({getMenu:async()=>[meal,snack],getDinnerMenu:async()=>structuredClone(dinner)});await app.login();
+    let page=view(app,'MenuScreen');nodes(page).find(node=>node.type==='input').props.onChange({target:{value:' Chapati Bhaji '}});
+    page=view(app,'MenuScreen');let cards=nodes(page).filter(node=>node.type?.name==='FoodCardWide');assert.equal(cards.length,2);assert.ok(cards.every(node=>node.props.item.name==='Chapati Bhaji'));
+    nodes(page).find(node=>node.type==='input').props.onChange({target:{value:'beans'}});page=view(app,'MenuScreen');cards=nodes(page).filter(node=>node.type?.name==='FoodCardWide');assert.equal(cards.length,1);assert.equal(cards[0].props.item.id,h.DINNER_THALI_ID);
+    nodes(page).find(node=>node.type==='input').props.onChange({target:{value:''}});app.render().setMenuCategory('Snacks');page=view(app,'MenuScreen');cards=nodes(page).filter(node=>node.type?.name==='FoodCardWide');assert.equal(cards.length,1);assert.equal(cards[0].props.item.id,'snack');
+    app.render().setMenuCategory('Beverages');assert.equal(nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide').length,0);
+    app.render().setMenuCategory('Meals');assert.equal(nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide').length,5);
+  });
+  await check('Aloo-only lunch remains listed at 45 while disabled dinner stays hidden and selection is required', async () => {
+    const app=harness({getLunchMenu:async()=>structuredClone(alooLunch),getDinnerMenu:async()=>({...structuredClone(dinner),available:false})});await app.login();const cards=nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide');
+    assert.equal(cards.length,3);const option=cards.find(node=>node.props.item.id===h.CHAPATI_BHAJI_ID).props.item;assert.equal(option.price,45);assert.equal(option.lunch.sabjiOptions.join('|'),'Aloo');assert.equal(app.render().add(option),false);assert.equal(app.render().add(option,1,'Paneer'),false);assert.equal(app.render().add(option,1,'Aloo'),true);assert.equal(app.render().cartTotal,45);
+  });
+  await check('Background meal request failure hides only that period and preserves independent available cards', async () => {
+    const app=harness({getDinnerMenu:async()=>structuredClone(dinner)});await app.login();app.api.getLunchMenu=async()=>{throw Error('Lunch network unavailable');};await app.render().refresh();let cards=nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide'&&node.props.item.lunch);assert.equal(cards.length,2);assert.ok(cards.every(node=>node.props.item.id.startsWith('dinner-')));
+    app.api.getLunchMenu=async()=>structuredClone(lunch);await app.render().refresh();cards=nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide'&&node.props.item.lunch);assert.equal(cards.length,4);
+  });
+  await check('Shared regular meal cards open choice details and keep direct Thali add interaction', async () => {
+    const app=harness({getDinnerMenu:async()=>structuredClone(dinner)});await app.login();const card=view(app,'FoodCardWide',{item:app.render().menu.find(item=>item.id===h.DINNER_CHAPATI_BHAJI_ID)});
+    assert.match(text(card),/Chapati Bhaji.*45.*Dinner.*Choose sabji/);nodes(card).find(node=>node.type==='button'&&text(node).includes('Choose sabji')).props.onClick();assert.equal(app.render().screen,'details');assert.equal(app.render().cart.length,0);
+    const details=view(app,'DetailsScreen'),radios=nodes(details).filter(node=>node.type==='input'&&node.props.type==='radio');assert.equal(radios.length,2);assert.equal(radios.map(node=>node.props.value).join('|'),'Beans|Peas');assert.equal(nodes(details).find(node=>node.type?.name==='Button'&&text(node).includes('Add')).props.disabled,true);
+    const thaliCard=view(app,'FoodCardWide',{item:app.render().menu.find(item=>item.id===h.THALI_ID)});nodes(thaliCard).find(node=>node.type==='button'&&text(node).includes('Add')).props.onClick();assert.equal(app.render().cart.length,1);assert.equal(app.render().cart[0].item.id,h.THALI_ID);assert.equal(app.render().cartTotal,80);
   });
   await check('Dinner Details requires its own sabji, sends dinner revision and keeps lunch snapshot', async () => {
     const calls=[]; const app=harness({getDinnerMenu:async()=>structuredClone(dinner),createOrder:async(items)=>{calls.push(items);return {id:'d1',orderId:8,items:[],payment:'Paid'};}}); await app.login();

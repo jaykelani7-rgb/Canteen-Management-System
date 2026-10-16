@@ -61,8 +61,6 @@ type Store = {
   lunchError: string | null
   dinner: StudentLunchMenu | null
   dinnerError: string | null
-  selectedMeal: BundleMeal
-  setSelectedMeal: (meal: BundleMeal) => void
   menuCategory: Category
   setMenuCategory: (category: Category) => void
   refresh: () => Promise<void>
@@ -1038,24 +1036,8 @@ function FoodCardWide({ item }: { item: MenuItem }) {
   )
 }
 
-function LunchNotice() {
-  const { lunch, lunchError, dinner, dinnerError, selectedMeal, setSelectedMeal, refresh } = useStore()
-  const menu = selectedMeal === 'dinner' ? dinner : lunch
-  const error = selectedMeal === 'dinner' ? dinnerError : lunchError
-  return <section aria-label="Meal period" className="mx-5 mt-4 rounded-3xl bg-card p-4 shadow-sm">
-    <div role="group" aria-label="Choose meal period" className="mb-3 flex gap-2">
-      {(['lunch', 'dinner'] as const).map(period => <button key={period} aria-pressed={selectedMeal === period} onClick={() => setSelectedMeal(period)} className={`rounded-xl px-4 py-2 text-sm font-bold ${selectedMeal === period ? 'bg-tangerine text-white' : 'bg-paper text-ink'}`}>{mealLabel(period)}</button>)}
-    </div>
-    <h2 className="font-display font-bold">Today’s {selectedMeal}</h2>
-    {menu?.serviceWindow && <p className="mt-1 text-xs text-ink-soft">{menu.serviceWindow} IST</p>}
-    <p className="mt-2 text-sm">Chapati Bhaji · Thali</p>
-    {(!menu || error || !menu.available) && <p role={error ? 'alert' : 'status'} className="mt-1 text-xs text-ink-soft">{error || menu?.unavailableReason || `Loading ${selectedMeal} availability…`}</p>}
-    {error && <button className="mt-2 text-xs font-bold text-tangerine" onClick={() => { void refresh() }}>Retry {selectedMeal} menu</button>}
-  </section>
-}
-
 function HomeScreen() {
-  const { go, user, menu: MENU, orders, selectOrder, notifications, menuLoading, menuError, refresh, setMenuCategory, selectedMeal } = useStore()
+  const { go, user, menu: MENU, orders, selectOrder, notifications, menuLoading, menuError, refresh, setMenuCategory } = useStore()
   const firstName = user?.name ? user.name.split(' ')[0] : 'Student'
   const liveOrder = orders.find(o => !['Completed', 'Picked Up', 'Cancelled'].includes(o.status))
   const catalogue = MENU.filter(item => !item.lunch)
@@ -1094,11 +1076,6 @@ function HomeScreen() {
         <StatusBadge status={liveOrder.status} />
       </button>}
 
-      <LunchNotice />
-      {MENU.some(item => item.lunch && bundleMeal(item) === selectedMeal) && <section aria-label={'Today’s ' + selectedMeal} className="mt-5 px-5">
-        <h2 className="mb-3 font-display text-lg font-bold">Today’s {selectedMeal}</h2>
-        <div className="flex flex-col gap-3">{MENU.filter(item => item.lunch && bundleMeal(item) === selectedMeal).map(item => <FoodCardWide key={item.id} item={item} />)}</div>
-      </section>}
       {/* Categories quick */}
       <div className="mt-5 grid grid-cols-4 gap-2 px-5">
         {[
@@ -1156,11 +1133,11 @@ function HomeScreen() {
 }
 
 function MenuScreen() {
-  const { menu: MENU, menuLoading, menuError, refresh, menuCategory: cat, setMenuCategory: setCat, selectedMeal } = useStore()
+  const { menu: MENU, menuLoading, menuError, refresh, menuCategory: cat, setMenuCategory: setCat } = useStore()
   const [query, setQuery] = useState('')
   const list = MENU.filter(
     (m) =>
-      (!m.lunch || bundleMeal(m) === selectedMeal) && (cat === 'All' || m.category === cat) &&
+      (!m.lunch || m.available) && (cat === 'All' || m.category === cat) &&
       (query.trim() === '' || `${m.name} ${m.desc}`.toLowerCase().includes(query.trim().toLowerCase()))
   )
   return (
@@ -1178,7 +1155,6 @@ function MenuScreen() {
           <button onClick={() => setQuery('')} className="text-ink-soft text-lg leading-none">×</button>
         )}
       </div>
-      <LunchNotice />
       <div className="mt-3">
         <CategoryTabs value={cat} onChange={setCat} />
       </div>
@@ -2079,9 +2055,6 @@ export default function App() {
   const [lunchError, setLunchError] = useState<string | null>(null)
   const [dinner, setDinner] = useState<StudentLunchMenu | null>(null)
   const [dinnerError, setDinnerError] = useState<string | null>(null)
-  const [selectedMeal, updateSelectedMeal] = useState<BundleMeal>('lunch')
-  const mealSelectionManual = useRef(false)
-  const setSelectedMeal = (meal: BundleMeal) => { mealSelectionManual.current = true; updateSelectedMeal(meal) }
   const [menuCategory, setMenuCategory] = useState<Category>('All')
   const [cart, setCart] = useState<CartLine[]>([])
   const [selected, setSelected] = useState<MenuItem | null>(null)
@@ -2095,7 +2068,7 @@ export default function App() {
   const userRef = useRef(user)
   userRef.current = user
   const showToast = (msg: string) => { if(toastTimer.current) clearTimeout(toastTimer.current); setToast(msg); toastTimer.current = setTimeout(() => setToast(null), 3500) }
-  const clearSession = () => { sessionVersion.current++; refreshInFlight.current = null; menuLoaded.current = false; mealSelectionManual.current = false; updateSelectedMeal('lunch'); setUser(null); setMenu([]); setLunch(null); setLunchError(null); setDinner(null); setDinnerError(null); setOrders([]); setOrder(null); setNotifications([]); setCart([]); setSelected(null); setError(null); setMenuError(null); setMenuLoading(false); setMenuCategory('All'); setBanner(null); setScreen('login'); setChecking(false); setLoading(false) }
+  const clearSession = () => { sessionVersion.current++; refreshInFlight.current = null; menuLoaded.current = false; setUser(null); setMenu([]); setLunch(null); setLunchError(null); setDinner(null); setDinnerError(null); setOrders([]); setOrder(null); setNotifications([]); setCart([]); setSelected(null); setError(null); setMenuError(null); setMenuLoading(false); setMenuCategory('All'); setBanner(null); setScreen('login'); setChecking(false); setLoading(false) }
   useEffect(() => {
     const expire = () => { const wasSignedIn = Boolean(userRef.current); clearSession(); if (wasSignedIn) showToast('Your session expired. Please sign in again.') }
     window.addEventListener(STUDENT_SESSION_EXPIRED, expire)
@@ -2129,7 +2102,6 @@ export default function App() {
       if (!next || next.mealType !== period || !Array.isArray(next.options) || !Array.isArray(next.contents) || !Array.isArray(next.sabjiOptions)) throw new Error(`The canteen returned an invalid ${period} menu.`)
       if (!current()) return
       if (period === 'lunch') { setLunch(next); setLunchError(null) } else { setDinner(next); setDinnerError(null) }
-      if (!mealSelectionManual.current && (next.currentMealType === 'lunch' || next.currentMealType === 'dinner')) updateSelectedMeal(next.currentMealType)
       const meals = lunchItems(next)
       setMenu(previous => [...previous.filter(item => !item.lunch || bundleMeal(item) !== period), ...meals])
       setSelected(previous => previous?.lunch && bundleMeal(previous) === period ? meals.find(item => item.id === previous.id) ?? { ...previous, available: false } : previous)
@@ -2215,7 +2187,7 @@ export default function App() {
   const pickup = async () => { if(!order) return; const version = sessionVersion.current; const next = await apiClient.pickupOrder(order.orderId); if(version !== sessionVersion.current) throw new Error('Your session changed. Sign in to check Your Orders.'); setOrder(next); await refresh() }
   const markRead = async () => { const version = sessionVersion.current; await apiClient.markAllNotificationsRead(); if(version === sessionVersion.current) setNotifications(prev => prev.map(n => ({...n,unread:false}))) }
   const store: Store = {
-    screen, user, menu, orders, order, notifications, loading, error, menuLoading, menuError, lunch, lunchError, dinner, dinnerError, selectedMeal, setSelectedMeal, menuCategory, setMenuCategory, refresh, selectOrder: setOrder, submitOrder, completePayment, pickup, markRead,
+    screen, user, menu, orders, order, notifications, loading, error, menuLoading, menuError, lunch, lunchError, dinner, dinnerError, menuCategory, setMenuCategory, refresh, selectOrder: setOrder, submitOrder, completePayment, pickup, markRead,
     go: next => { if(!user && next !== 'login') { setScreen('login'); return }; setScreen(next) }, loginUser, registerUser, logoutUser,
     cart, add: (item, qty = 1, sabjiChoice) => {
       const current = menu.find(next => next.id === item.id)
