@@ -5,11 +5,13 @@ All dishes and balances here are isolated fixtures, never live menu data.
 import asyncio
 from decimal import Decimal
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
 
 import admin_operations
+from lunch_service import meal_state
 from image_fixtures import attach_test_image
 from models import FoodItem, Order, StudentUser, WalletTransaction, WeeklyMenu
 from test_lunch import CONTENTS, SABJIS, deterministic_lunch, order
@@ -152,6 +154,75 @@ async def test_dinner_uses_existing_service_window_exact_boundaries(
     assert placed.status_code == (201 if allowed else 409), placed.text
     if not allowed:
         await assert_not_charged(mess_client)
+
+
+@pytest.mark.parametrize('meal,hour,minute,visible,orderable', [
+    ('lunch', 11, 0, True, False),
+    ('lunch', 12, 0, True, True),
+    ('lunch', 15, 0, False, False),
+    ('dinner', 16, 0, True, False),
+    ('dinner', 19, 29, True, False),
+    ('dinner', 19, 30, True, True),
+    ('dinner', 22, 30, False, False),
+    ('dinner', 23, 30, False, False),
+])
+async def test_upcoming_meal_discovery_does_not_enable_preorders_or_past_meals(
+        mess_client, deterministic_lunch, meal, hour, minute, visible, orderable):
+    client, headers, _ = await ready(mess_client, deterministic_lunch)
+    deterministic_lunch['now'] = deterministic_lunch['now'].replace(hour=hour, minute=minute)
+    state = (await client.get('/api/menu/' + meal)).json()
+    assert state['configured'] is True
+    assert state['visible'] is visible and state['available'] is orderable
+    assert all(option['visible'] is visible for option in state['options'])
+    assert all(option['available'] is orderable for option in state['options'])
+    assert state['serviceStart'] == ('12:00' if meal == 'lunch' else '19:30')
+    assert state['serviceEnd'] == ('15:00' if meal == 'lunch' else '22:30')
+    assert [option['price'] for option in state['options']] == [45, 80]
+    if not orderable:
+        response = await order(client, headers, [item(state, meal=meal, thali=True)])
+        assert response.status_code == 409, response.text
+        await assert_not_charged(mess_client)
+
+
+@pytest.mark.parametrize('changes', [
+    {'ordering_enabled': False}, {'sabji_options': ['Paneer']},
+    {'sabji_options': ['Paneer', 'Missing']}, {'items': []},
+])
+def test_disabled_or_invalid_future_configuration_is_never_visible(deterministic_lunch, changes):
+    row = SimpleNamespace(items=DINNER_CONTENTS, sabji_options=DINNER_SABJIS,
+                          ordering_enabled=True)
+    for key, value in changes.items():
+        setattr(row, key, value)
+    state = meal_state(row, deterministic_lunch['now'].replace(hour=16), meal_type='dinner')
+    assert state['configured'] is False
+    assert state['visible'] is state['available'] is False
+    assert all(not option['visible'] and not option['available'] for option in state['options'])
+
+
+def test_future_sabji_availability_preserves_valid_choice_without_allowing_early_orders(
+        deterministic_lunch):
+    row = SimpleNamespace(items=DINNER_CONTENTS, sabji_options=DINNER_SABJIS,
+                          ordering_enabled=True)
+    now = deterministic_lunch['now'].replace(hour=16)
+    state = meal_state(row, now, {'Paneer': False, 'Aloo': True}, 'dinner')
+    assert state['configured'] is state['visible'] is True
+    assert state['available'] is False
+    assert state['sabjiOptions'] == ['Aloo']
+    assert all(option['visible'] and not option['available'] for option in state['options'])
+    assert 'Paneer' not in state['contents']
+    state = meal_state(row, now, {'Paneer': False, 'Aloo': False}, 'dinner')
+    assert state['configured'] is state['visible'] is True
+    chapati, thali = state['options']
+    assert chapati['visible'] is False and thali['visible'] is True
+    restored = meal_state(row, now, {'Paneer': True, 'Aloo': True}, 'dinner')
+    assert restored['sabjiOptions'] == DINNER_SABJIS
+    assert all(option['visible'] and not option['available'] for option in restored['options'])
+
+
+def test_unconfigured_menu_still_provides_authoritative_service_times(deterministic_lunch):
+    state = meal_state(None, deterministic_lunch['now'], meal_type='dinner')
+    assert state['configured'] is state['visible'] is state['available'] is False
+    assert state['serviceStart'] == '19:30' and state['serviceEnd'] == '22:30'
 
 
 @pytest.mark.parametrize('changes', [{'price': 1}, {'sabjiChoice': None},

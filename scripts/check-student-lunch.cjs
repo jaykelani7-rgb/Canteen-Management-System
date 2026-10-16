@@ -21,6 +21,7 @@ function hooks() {
     useEffect: (run, deps) => { const index = cursor++, prior = group[index]; if (!prior || !deps || deps.some((value, i) => !Object.is(value, prior.deps[i]))) { group[index] = { deps, cleanup: prior?.cleanup }; effects.push(() => { prior?.cleanup?.(); group[index].cleanup = run(); }); } },
   };
   const runtime = { react, store: null, begin, commit: () => { while (effects.length) effects.shift()(); }, intervals,
+    unmount: key => { for (const slot of groups.get(key) || []) slot?.cleanup?.(); groups.delete(key); },
     setInterval: callback => { const id = ++timer; intervals.set(id, callback); return id; }, clearInterval: id => intervals.delete(id) };
   return runtime;
 }
@@ -44,15 +45,15 @@ const text = element => {
 };
 const meal = { id: 'meal', name: 'Dosa', desc: 'South Dish', category: 'Meals', price: 40, photo: '', rating: 0, available: true, veg: true, emoji: '🍽️', prepMins: 10 };
 
-function appHarness(overrides = {}) {
+function appHarness(overrides = {}, globals = {}) {
   const runtime = hooks(), user = { id: 'student-a', name: 'Student' };
   const api = { hasSession: () => false, getMenu: async () => [meal], getDinnerMenu: async () => ({ date: '2026-10-15', day: 'Thursday', mealType: 'dinner', available: false, unavailableReason: 'Dinner unconfigured', mealRevision: null, contents: [], sabjiOptions: [], options: [] }), getLunchMenu: async () => ({ date: '2026-10-15', day: 'Thursday', mealType: 'lunch', available: false, unavailableReason: 'Lunch unconfigured', mealRevision: null, contents: [], sabjiOptions: [], options: [] }), getOrders: async () => [], getNotifications: async () => [], getMe: async () => ({ success: true, user }), login: async () => ({ success: true, user }), logout: async () => {}, ...overrides };
   const app = load('student/src/App.tsx', {
     react: runtime.react, '../../src/lib/apiClient': { apiClient: api, STUDENT_SESSION_EXPIRED: 'expired' },
-    '../../src/lib/paymentCheckout': { checkoutIntent: () => 'lunch-test-key', clearCheckoutIntent() {} }, '../../src/lib/studentLunch': load('src/lib/studentLunch.ts', {}), '../../src/components/FoodImage': { default: function FoodImage() {} },
+    '../../src/lib/paymentCheckout': { checkoutIntent: () => 'lunch-test-key', clearCheckoutIntent() {} }, '../../src/lib/studentLunch': load('src/lib/studentLunch.ts', {}), '../../src/lib/studentRush': load('src/lib/studentRush.ts', {}), '../../src/components/FoodImage': { default: function FoodImage() {} },
     '../../src/components/FoodPhotoCredits': { default: function FoodPhotoCredits() {} },
   }, { setTimeout: () => 1, clearTimeout() {}, setInterval: runtime.setInterval, clearInterval: runtime.clearInterval,
-    document: { visibilityState: 'visible' }, window: { addEventListener() {}, removeEventListener() {} } }, '\nexport { HomeScreen, MenuScreen, DetailsScreen, CartScreen, OrderDetailsScreen, FoodCardWide };');
+    document: { visibilityState: 'visible' }, window: { addEventListener() {}, removeEventListener() {} }, ...globals }, '\nexport { HomeScreen, MenuScreen, DetailsScreen, CartScreen, OrderDetailsScreen, FoodCardWide };');
   function render() { runtime.begin('App'); runtime.store = app.default().props.value; runtime.commit(); return runtime.store; }
   const mounted = { app, api, runtime, render, login: async () => { await render().loginUser('ROLL', 'PASS'); render(); await tick(); return render(); } };
   render(); return mounted;
@@ -157,7 +158,7 @@ function view(app, name, props) { app.render(); app.runtime.begin(name); return 
     assert.equal(all.filter(node=>node.type?.name==='FoodCardWide'&&node.props.item.lunch).length,0);
     assert.ok(all.some(node=>node.type?.name==='SearchBar'));
     assert.match(text(home),/Good afternoon.*Hey,.*Student.*Main Block Canteen/);
-    assert.match(text(home),/Snacks.*Meals.*Beverages.*Quick Bites.*Beat the 1 PM rush.*Order ahead.*Popular today.*See all/);
+    assert.match(text(home),/Snacks.*Meals.*Beverages.*Quick Bites.*Beat .* rush.*Order ahead.*Popular today.*See all/);
     assert.doesNotMatch(text(home),/Today.s lunch|Today.s dinner|Chapati Bhaji|Thali|19:30|Lunch closed/);
     assert.ok(all.some(node=>node.type?.name==='FoodCardWide'&&node.props.item.id===meal.id));
     all.find(node=>node.type==='button'&&text(node).includes('Meals')).props.onClick();assert.equal(app.render().menuCategory,'Meals');assert.equal(app.render().screen,'menu');
@@ -229,6 +230,42 @@ function view(app, name, props) { app.render(); app.runtime.begin(name); return 
   await check('Dinner with no sabji disables only Chapati and leaves configured Thali orderable', async () => {
     const noSabji={...structuredClone(dinner),sabjiOptions:[],options:[{...dinner.options[0],available:false,unavailableReason:'No dinner sabji available'},dinner.options[1]]};
     const [blocked,allowed]=h.lunchItems(noSabji); assert.equal(blocked.available,false); assert.equal(allowed.available,true); assert.equal(h.mealCartError([{item:allowed}],lunch,noSabji),null); assert.match(h.mealCartError([{item:blocked}],lunch,noSabji),/No dinner sabji/);
+  });
+  await check('Configured upcoming dinner is visible under All and Meals without permitting early ordering', async () => {
+    const future={...structuredClone(dinner),configured:true,visible:true,available:false,serviceStart:'19:30',serviceEnd:'22:30',unavailableReason:'Dinner opens at 19:30',options:dinner.options.map(option=>({...option,visible:true,available:false,unavailableReason:'Dinner opens at 19:30'}))};
+    let created=0; const app=harness({getLunchMenu:async()=>({...structuredClone(lunch),configured:true,visible:false,available:false}),getDinnerMenu:async()=>structuredClone(future),createOrder:async()=>{created++;}}); await app.login();
+    for(const category of ['All','Meals']) {
+      app.render().setMenuCategory(category); const page=view(app,'MenuScreen'),cards=nodes(page).filter(node=>node.type?.name==='FoodCardWide');
+      assert.equal(cards.length,3); assert.equal(cards.filter(node=>node.props.item.lunch).length,2);
+      assert.equal(nodes(page).filter(node=>node.type==='button'&&/^(Lunch|Dinner)$/.test(text(node))).length,0);
+      for(const entry of cards.filter(node=>node.props.item.lunch)) {
+        assert.equal(entry.props.item.available,false); const card=view(app,'FoodCardWide',{item:entry.props.item});
+        assert.match(text(card),/Dinner opens at 19:30.*Unavailable/); assert.equal(nodes(card).filter(node=>node.type==='button'&&/Add|Choose sabji/.test(text(node))).length,0);
+        assert.equal(app.render().add({...entry.props.item,available:true},1,'Beans'),false);
+      }
+    }
+    assert.equal(app.render().cart.length,0); assert.equal(created,0);
+  });
+  await check('Disabled or individually unusable meal configurations remain hidden even with ordering availability mismatches', () => {
+    const disabled=h.lunchItems({...dinner,configured:false,visible:true}); assert.ok(disabled.every(item=>item.lunch.visible===false));
+    const items=h.lunchItems({...dinner,configured:true,visible:true,options:[{...dinner.options[0],visible:false,available:false}, {...dinner.options[1],visible:true}]});
+    assert.equal(items[0].lunch.visible,false); assert.equal(items[1].lunch.visible,true);
+  });
+  await check('An upcoming period stays searchable without appearing in unrelated categories', async () => {
+    const future={...structuredClone(dinner),configured:true,visible:true,available:false,options:dinner.options.map(option=>({...option,visible:true,available:false}))};
+    const app=harness({getDinnerMenu:async()=>future}); await app.login(); app.render().setMenuCategory('Meals'); let page=view(app,'MenuScreen');
+    nodes(page).find(node=>node.type==='input').props.onChange({target:{value:'Thali'}}); page=view(app,'MenuScreen');
+    assert.equal(nodes(page).filter(node=>node.type?.name==='FoodCardWide').length,2);
+    app.render().setMenuCategory('Beverages'); assert.equal(nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide').length,0);
+  });
+  await check('Home rush updates while open and removes its interval and focus listener on unmount', async () => {
+    let instant='2026-10-16T11:00:00+05:30',focus,removed=0;
+    class Clock extends Date { constructor(...args){super(...(args.length?args:[instant]));} }
+    const app=appHarness({getLunchMenu:async()=>({...lunch,serviceStart:'12:00'}),getDinnerMenu:async()=>({...dinner,serviceStart:'19:30'})},{Date:Clock,window:{addEventListener:(type,callback)=>{if(type==='focus')focus=callback;},removeEventListener:(type,callback)=>{if(type==='focus'&&callback===focus)removed++;}}});
+    await app.login(); let page=view(app,'HomeScreen'); app.runtime.commit(); assert.match(text(page),/Beat the 12 PM lunch rush/);
+    instant='2026-10-16T16:00:00+05:30'; for(const callback of app.runtime.intervals.values()) callback(); page=view(app,'HomeScreen'); assert.match(text(page),/Beat the 7:30 PM dinner rush/);
+    instant='2026-10-16T23:00:00+05:30'; focus(); page=view(app,'HomeScreen'); assert.match(text(page),/Beat tomorrow.s 12 PM lunch rush/);
+    const timers=app.runtime.intervals.size; app.runtime.unmount('HomeScreen'); assert.equal(app.runtime.intervals.size,timers-1); assert.equal(removed,1);
   });
   console.log(`Student lunch/dinner checks passed: ${passed}. No network, database, deployment or APK changes performed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

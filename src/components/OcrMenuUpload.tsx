@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { adminOperationsApi } from '../lib/adminOperationsApi'
 
 export interface ExtractedMeal {
@@ -31,7 +31,10 @@ export default function OcrMenuUpload({
   const [error, setError] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const requestLock = useRef(false)
+  const scanTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => () => { if (scanTimer.current) clearInterval(scanTimer.current) }, [])
 
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault()
@@ -69,7 +72,13 @@ export default function OcrMenuUpload({
   const runOcrProcessing = async () => {
     if (!file || requestLock.current) return
     requestLock.current = true; setIsProcessing(true); setIsSaved(false); setError('')
-    setScanStage('Extracting menu text. This may take a moment…')
+    setExtractedData(null)
+    setScanStage('Sending image for extraction. Nothing is saved automatically…')
+    const started = Date.now()
+    scanTimer.current = setInterval(() => {
+      const seconds = Math.floor((Date.now() - started) / 1000)
+      setScanStage(`Waiting for the extraction response (${seconds}s). No menu has been saved.`)
+    }, 1000)
     try {
       const response = await adminOperationsApi.extractMenu(file)
       if (!Array.isArray(response.schedule) || !response.schedule.length) throw new Error('No readable meal entries were found. Try a clearer photo.')
@@ -77,7 +86,11 @@ export default function OcrMenuUpload({
       setSelectedDayTab(response.schedule[0].day)
       onShowToast?.('OCR Complete', 'Review the extracted dishes before saving.', 'success')
     } catch (cause) { setError((cause as Error).message); onShowToast?.('OCR failed', (cause as Error).message, 'error') }
-    finally { requestLock.current = false; setIsProcessing(false) }
+    finally {
+      if (scanTimer.current) clearInterval(scanTimer.current)
+      scanTimer.current = null
+      requestLock.current = false; setIsProcessing(false)
+    }
   }
 
   const handleAddItem = (day: string, mealType: string) => {
@@ -114,7 +127,7 @@ export default function OcrMenuUpload({
   }
 
   const handleSaveToDatabase = async () => {
-    if (!extractedData || requestLock.current) return
+    if (!extractedData || isSaved || requestLock.current) return
     requestLock.current = true; setIsSaving(true); setError('')
     try {
       await adminOperationsApi.saveWeeklyMenu(extractedData.map(({ day, meal_type, items }) => ({ day, meal_type, items })))
@@ -256,7 +269,7 @@ export default function OcrMenuUpload({
                             d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                           ></path>
                         </svg>
-                        <span>{scanStage}</span>
+                        <span role="status" aria-live="polite">{scanStage}</span>
                       </div>
                     </div>
                   )}

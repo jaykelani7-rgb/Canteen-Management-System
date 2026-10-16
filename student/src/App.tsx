@@ -10,6 +10,7 @@ import { apiClient, STUDENT_SESSION_EXPIRED } from '../../src/lib/apiClient'
 import type { UserProfile, AuthResponse, RegisterInput, StudentMenuItem, StudentOrder, StudentOrderStatus, StudentNotification, OrderTracking, WalletTransaction, WalletTopup, StudentLunchMenu } from '../../src/lib/studentTypes'
 import { checkoutIntent, clearCheckoutIntent, completeGatewayPayment, completeWalletTopup, walletTopupIntent, clearWalletTopupIntent, CheckoutDismissed } from '../../src/lib/paymentCheckout'
 import { isChapatiItem, isLunchItem, bundleMeal, mealLabel, type BundleMeal, lunchItems, lunchLineKey, lunchCartError, mealCartError, lunchOrderInput, lunchContents } from '../../src/lib/studentLunch'
+import { nextRush } from '../../src/lib/studentRush'
 import './student.css'
 
 /* ============================================================================
@@ -1005,7 +1006,7 @@ function FoodCardWide({ item }: { item: MenuItem }) {
       </div>
 
       <p className="text-xs leading-relaxed text-ink-soft">{item.desc}</p>
-      {item.lunch && !item.available && <p className="text-xs text-berry">{item.lunch.unavailableReason || 'Lunch is currently unavailable.'}</p>}
+      {item.lunch && !item.available && <p className="text-xs text-berry">{item.lunch.unavailableReason || `${mealLabel(bundleMeal(item))} is currently unavailable.`}</p>}
 
       <div className="mt-auto flex items-center justify-between gap-2 pt-1">
         <div className="flex items-center gap-2">
@@ -1037,7 +1038,15 @@ function FoodCardWide({ item }: { item: MenuItem }) {
 }
 
 function HomeScreen() {
-  const { go, user, menu: MENU, orders, selectOrder, notifications, menuLoading, menuError, refresh, setMenuCategory } = useStore()
+  const { go, user, menu: MENU, orders, selectOrder, notifications, menuLoading, menuError, refresh, setMenuCategory, lunch, dinner } = useStore()
+  const [rushNow, setRushNow] = useState(() => new Date())
+  useEffect(() => {
+    const timer = setInterval(() => setRushNow(new Date()), 30000)
+    const update = () => setRushNow(new Date())
+    window.addEventListener('focus', update)
+    return () => { clearInterval(timer); window.removeEventListener('focus', update) }
+  }, [])
+  const rush = nextRush(rushNow, lunch, dinner)
   const firstName = user?.name ? user.name.split(' ')[0] : 'Student'
   const liveOrder = orders.find(o => !['Completed', 'Picked Up', 'Cancelled'].includes(o.status))
   const catalogue = MENU.filter(item => !item.lunch)
@@ -1099,10 +1108,10 @@ function HomeScreen() {
       <div className="mx-5 mt-5 flex items-center gap-4 overflow-hidden rounded-3xl bg-tangerine-soft p-5">
         <div className="flex-1">
           <p className="font-display text-lg font-bold text-tangerine-dark">
-            Beat the 1 PM rush
+            {rush.title}
           </p>
           <p className="mt-1 text-xs text-tangerine-dark/80">
-            Pre-order now, we’ll hold your spot in the queue.
+            {rush.description}
           </p>
           <button
             onClick={() => go('menu')}
@@ -1137,7 +1146,7 @@ function MenuScreen() {
   const [query, setQuery] = useState('')
   const list = MENU.filter(
     (m) =>
-      (!m.lunch || m.available) && (cat === 'All' || m.category === cat) &&
+      (!m.lunch || (m.lunch.visible ?? m.available)) && (cat === 'All' || m.category === cat) &&
       (query.trim() === '' || `${m.name} ${m.desc}`.toLowerCase().includes(query.trim().toLowerCase()))
   )
   return (
@@ -2109,7 +2118,7 @@ export default function App() {
       if (current()) {
         const message = cause instanceof Error ? cause.message : `Cannot load ${period}. Please retry.`
         if (period === 'lunch') setLunchError(message); else setDinnerError(message)
-        setMenu(previous => previous.map(item => item.lunch && bundleMeal(item) === period ? { ...item, available: false, lunch: { ...item.lunch, unavailableReason: `${mealLabel(period)} could not be refreshed. Please retry.` } } : item))
+        setMenu(previous => previous.map(item => item.lunch && bundleMeal(item) === period ? { ...item, available: false, lunch: { ...item.lunch, visible: false, unavailableReason: `${mealLabel(period)} could not be refreshed. Please retry.` } } : item))
         setSelected(previous => previous?.lunch && bundleMeal(previous) === period ? { ...previous, available: false } : previous)
       }
       throw cause

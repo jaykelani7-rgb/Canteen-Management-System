@@ -148,6 +148,82 @@ async def test_ocr_sdk_network_timeout_is_actionable_and_does_not_leak(monkeypat
     assert calls["closed"] is True
 
 
+@pytest.mark.parametrize("transport_timeout", [False, True])
+async def test_ocr_timeout_records_source_without_blame_or_secrets(monkeypatch, caplog, transport_timeout):
+    import asyncio
+    import logging
+    async def generate(**kwargs):
+        if transport_timeout:
+            raise ocr_router.httpx.ReadTimeout("test-only-sensitive-key")
+        await asyncio.sleep(1)
+    calls = provider(monkeypatch, generate, timeout=0.01)
+    caplog.set_level(logging.INFO, logger=ocr_router.__name__)
+    events = []
+    monkeypatch.setattr(ocr_router, "log_event", lambda event, **fields: events.append({"event": event, **fields}))
+    with pytest.raises(HTTPException) as result:
+        await ocr_router.extract_menu(png(), "image/png", "a" * 32)
+    assert result.value.status_code == 504
+    assert "No menu was saved" in result.value.detail
+    assert "smaller" not in result.value.detail
+    assert "source=" + ("provider_transport" if transport_timeout else "application_deadline") in caplog.text
+    assert events[0]["mime"] == "image/png" and events[0]["bytes"] == len(png())
+    assert events[-1]["outcome"] == ("provider_transport_timeout" if transport_timeout else "application_deadline")
+    assert events[-1]["request_id"] == "a" * 32 and events[-1]["elapsed_ms"] >= 0
+    assert "elapsed_ms=" in caplog.text
+    assert "test-only-sensitive-key" not in caplog.text
+    assert calls["closed"] is True
+
+
+@pytest.mark.parametrize("reason", ["MAX_TOKENS", "SAFETY", "RECITATION", "OTHER", None])
+async def test_ocr_rejects_incomplete_provider_result_even_if_json_is_valid(monkeypatch, reason):
+    async def generate(**kwargs):
+        return SimpleNamespace(text='{"schedule":[{"day":"Monday","meal_type":"lunch","items":["Rice"]}]}',
+            candidates=[SimpleNamespace(finish_reason=reason)])
+    calls = provider(monkeypatch, generate)
+    with pytest.raises(HTTPException) as result:
+        await ocr_router.extract_menu(png(), "image/png")
+    assert result.value.status_code == 502 and "review" in result.value.detail
+    assert calls["closed"] is True
+
+
+async def test_ocr_timeout_then_successful_retry_never_autosaves(mess_client, monkeypatch):
+    from sqlalchemy import select, func
+    from models import WeeklyMenu as StoredMenu
+    client, sessions, _ = mess_client
+    attempts = []
+    async def generate(**kwargs):
+        attempts.append(True)
+        if len(attempts) == 1:
+            raise ocr_router.httpx.ReadTimeout("test-only-sensitive-key")
+        return SimpleNamespace(text='{"schedule":[{"day":"Monday","meal_type":"lunch","items":["Dal","Rice"]}]}',
+            candidates=[SimpleNamespace(finish_reason=ocr_router.types.FinishReason.STOP)])
+    provider(monkeypatch, generate)
+    events = []
+    monkeypatch.setattr(ocr_router, "log_event", lambda event, **fields: events.append({"event": event, **fields}))
+    first = await client.post("/api/admin/menu/upload-ocr", files={"file": ("menu.png", png(), "image/png")})
+    assert first.status_code == 504 and "No menu was saved" in first.json()["detail"]
+    second = await client.post("/api/admin/menu/upload-ocr", files={"file": ("menu.png", png(), "image/png")})
+    assert second.status_code == 200 and second.json()["schedule"][0]["items"] == ["Dal", "Rice"]
+    assert len(attempts) == 2
+    finished = [event for event in events if event["event"] == "ocr_extraction_finished"]
+    assert [event["request_id"] for event in finished] == [first.headers["X-Request-ID"], second.headers["X-Request-ID"]]
+    assert [event["outcome"] for event in finished] == ["provider_transport_timeout", "completed"]
+    async with sessions() as db:
+        assert (await db.execute(select(func.count()).select_from(StoredMenu))).scalar_one() == 0
+
+
+async def test_ocr_metadata_does_not_echo_untrusted_identifiers(monkeypatch):
+    async def generate(**kwargs):
+        return SimpleNamespace(text='{"schedule":[{"day":"Monday","meal_type":"lunch","items":["Rice"]}]}')
+    provider(monkeypatch, generate)
+    monkeypatch.setattr(ocr_router.settings, "OCR_MODEL", "https://provider.invalid/?key=test-only-sensitive-key")
+    events = []
+    monkeypatch.setattr(ocr_router, "log_event", lambda event, **fields: events.append({"event": event, **fields}))
+    await ocr_router.extract_menu(png(), "image/png", "test-only-sensitive-key")
+    assert all(event["request_id"] == "" and event["model"] == "[configured model]" for event in events)
+    assert "test-only-sensitive-key" not in str(events)
+
+
 @pytest.mark.parametrize("payload,reason,hint",[
     ({"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Rejected request secret-source-token","details":[{"reason":"API_KEY_INVALID","metadata":{"api_key":"secret-source-token"}}]}},"invalid_api_key","invalid or expired"),
     ({"error":{"code":400,"message":"API key not valid. Pass a valid API key secret-source-token"}},"invalid_api_key","invalid or expired"),
@@ -269,7 +345,7 @@ async def test_real_sdk_wire_schema_omits_rejected_field_and_preserves_image(mon
             assert actual.format == 'PNG' and actual.size == (8, 8)
         assert str(request.url) == 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent'
         observed.append(True)
-        return httpx.Response(200, json={'candidates': [{'content': {'role': 'model', 'parts': [
+        return httpx.Response(200, json={'candidates': [{'finishReason': 'STOP', 'content': {'role': 'model', 'parts': [
             {'text': '{"schedule":[{"day":"Monday","meal_type":"lunch","items":["Dal","Rice"]}]}'}]}}]})
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(transport))

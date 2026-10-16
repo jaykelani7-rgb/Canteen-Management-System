@@ -42,6 +42,8 @@ export async function adminRequest<T>(path: string, method = 'GET', body?: unkno
     if (cause instanceof Error && cause.name === 'TimeoutError') {
       const message = path === '/menu/weekly'
         ? 'Saving the weekly menu timed out. Reload Weekly Schedule to confirm whether it saved before retrying.'
+        : path === '/menu/upload-ocr'
+        ? 'The extraction response timed out. No menu has been saved. Retry extraction once the backend is reachable; review the result before saving.'
         : 'The backend request timed out. Please try again.';
       throw new AdminApiError(message, 408)
     }

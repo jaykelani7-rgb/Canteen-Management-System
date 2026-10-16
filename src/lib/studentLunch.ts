@@ -18,7 +18,7 @@ export function lunchItems(menu: StudentLunchMenu): StudentMenuItem[] {
       ? '3 chapatis + salad + your choice of 1 sabji' : menu.contents.join(' · ') || `Complete meal from today’s ${menu.mealType} menu`,
     rating: 0, prepMins: 10, category: 'Meals', veg: true, available: menu.available && option.available !== false,
     emoji: '🍽️', photo: '', tag: `Today’s ${menu.mealType}`,
-    lunch: { mealType: menu.mealType, serviceWindow: menu.serviceWindow, date: menu.date, revision: menu.mealRevision, contents: menu.contents,
+    lunch: { visible: menu.configured !== false && (menu.visible ?? menu.available) && (option.visible ?? option.available !== false), mealType: menu.mealType, serviceWindow: menu.serviceWindow, date: menu.date, revision: menu.mealRevision, contents: menu.contents,
       sabjiOptions: menu.sabjiOptions, unavailableReason: option.available === false ? option.unavailableReason || menu.unavailableReason : menu.unavailableReason },
   }))
 }

@@ -69,6 +69,7 @@ def meal_state(row, now, availability=None, meal_type="lunch"):
                      "chapatiBaseAvailable": chapati_base_available}
         revision = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
     reason = None
+    configured = False
     if not row or not enabled:
         reason = f"{title} ordering is not configured or is disabled for today"
     else:
@@ -76,25 +77,40 @@ def meal_state(row, now, availability=None, meal_type="lunch"):
             validate_meal_configuration(configured_contents, configured_sabjis, enabled, meal_type)
         except HTTPException:
             reason = f"Today's {meal_type} configuration is incomplete"
+        else:
+            configured = True
         if reason is None and not contents:
             reason = f"Today's {meal_type} contents are currently unavailable"
     window = MEAL_WINDOWS[MealType(meal_type)]
     local_time = now.time().replace(tzinfo=None)
+    # Menu discovery is independent from ordering permission: students can see
+    # today's valid upcoming meals, but cannot order them before service starts.
+    # Finished service periods disappear rather than advertising past meals.
+    visible = reason is None and local_time < window["cutoff"]
     if reason is None and not window["service_start"] <= local_time < window["cutoff"]:
         reason = title + " is available during " + window["window_str"] + " IST"
     options = []
     for option in MEAL_OPTIONS[meal_type]:
         option_reason = reason
-        if option_reason is None and option["id"] == f"{meal_type}-chapati-bhaji":
+        option_visible = visible
+        if option["id"] == f"{meal_type}-chapati-bhaji":
             if not sabji_options:
-                option_reason = f"Today's {meal_type} sabjis are currently unavailable"
+                option_visible = False
+                if option_reason is None:
+                    option_reason = f"Today's {meal_type} sabjis are currently unavailable"
             elif not chapati_base_available:
-                option_reason = "Chapati Bhaji requires available chapatis and salad"
-        options.append({**option, "available": option_reason is None, "unavailableReason": option_reason})
+                option_visible = False
+                if option_reason is None:
+                    option_reason = "Chapati Bhaji requires available chapatis and salad"
+        options.append({**option, "visible": option_visible,
+                        "available": option_reason is None, "unavailableReason": option_reason})
     return {"date": now.date().isoformat(), "day": now.strftime("%A"), "mealType": meal_type,
+            "configured": configured, "visible": any(option["visible"] for option in options),
             "available": any(option["available"] for option in options), "unavailableReason": reason,
             "mealRevision": revision, "contents": contents, "sabjiOptions": sabji_options, "options": options,
             "serviceWindow": window["window_str"],
+            "serviceStart": window["service_start"].strftime("%H:%M"),
+            "serviceEnd": window["cutoff"].strftime("%H:%M"),
             "currentMealType": determine_current_or_upcoming_meal(local_time)[0].value}
 
 
