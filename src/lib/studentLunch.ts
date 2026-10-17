@@ -10,6 +10,13 @@ export const isChapatiItem = (id: string) => id === CHAPATI_BHAJI_ID || id === D
 export const isLunchItem = (id: string) => isChapatiItem(id) || id === THALI_ID || id === DINNER_THALI_ID
 export const bundleMeal = (item: StudentMenuItem): BundleMeal => item.id.startsWith('dinner-') ? 'dinner' : 'lunch'
 export const mealLabel = (meal: BundleMeal) => meal === 'dinner' ? 'Dinner' : 'Lunch'
+// Presentation only: display the API's actual hours without changing permission.
+export function mealServiceHours(window?: string): string | null {
+  const match = window?.match(/^\s*([01]\d|2[0-3]):([0-5]\d)\s*[-–]\s*([01]\d|2[0-3]):([0-5]\d)\s*$/)
+  if (!match) return null
+  const time = (hour: string, minute: string) => `${Number(hour) % 12 || 12}${minute === '00' ? '' : ':' + minute} ${Number(hour) >= 12 ? 'PM' : 'AM'}`
+  return `${time(match[1], match[2])} – ${time(match[3], match[4])}`
+}
 export const lunchLineKey = (item: StudentMenuItem, sabjiChoice?: string) => item.lunch
   ? JSON.stringify([item.id, bundleMeal(item), item.lunch.date, item.lunch.revision, sabjiChoice || '']) : item.id
 export function lunchItems(menu: StudentLunchMenu): StudentMenuItem[] {

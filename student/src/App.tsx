@@ -9,7 +9,7 @@ import {
 import { apiClient, STUDENT_SESSION_EXPIRED } from '../../src/lib/apiClient'
 import type { UserProfile, AuthResponse, RegisterInput, StudentMenuItem, StudentOrder, StudentOrderStatus, StudentNotification, OrderTracking, WalletTransaction, WalletTopup, StudentLunchMenu } from '../../src/lib/studentTypes'
 import { checkoutIntent, clearCheckoutIntent, completeGatewayPayment, completeWalletTopup, walletTopupIntent, clearWalletTopupIntent, CheckoutDismissed } from '../../src/lib/paymentCheckout'
-import { isChapatiItem, isLunchItem, bundleMeal, mealLabel, type BundleMeal, lunchItems, lunchLineKey, lunchCartError, mealCartError, lunchOrderInput, lunchContents } from '../../src/lib/studentLunch'
+import { isChapatiItem, isLunchItem, bundleMeal, mealLabel, mealServiceHours, type BundleMeal, lunchItems, lunchLineKey, lunchCartError, mealCartError, lunchOrderInput, lunchContents } from '../../src/lib/studentLunch'
 import { nextRush } from '../../src/lib/studentRush'
 import { createStudentNavigation, type StudentScreen as Screen } from './navigation'
 import { attachStudentNativeBack } from './native'
@@ -992,7 +992,7 @@ function FoodCardWide({ item }: { item: MenuItem }) {
       </div>
 
       <p className="text-xs leading-relaxed text-ink-soft">{item.desc}</p>
-      {item.lunch && !item.available && <p className="text-xs text-berry">{item.lunch.unavailableReason || `${mealLabel(bundleMeal(item))} is currently unavailable.`}</p>}
+      {isChapatiItem(item.id) && <p className="text-xs text-ink-soft">{item.lunch?.sabjiOptions.length ?? 0} sabji {(item.lunch?.sabjiOptions.length ?? 0) === 1 ? 'option' : 'options'} available</p>}
 
       <div className="mt-auto flex items-center justify-between gap-2 pt-1">
         <div className="flex items-center gap-2">
@@ -1002,7 +1002,14 @@ function FoodCardWide({ item }: { item: MenuItem }) {
             {item.lunch ? mealLabel(bundleMeal(item)) : item.rating}
           </span>
         </div>
-        {!item.available ? (
+        {item.lunch && (isChapatiItem(item.id) || !item.available) ? (
+          <button
+            onClick={() => { select(item); go('details') }}
+            className="flex items-center gap-1 rounded-full bg-tangerine-soft px-3 py-1.5 text-xs font-bold text-tangerine-dark active:scale-95"
+          >
+            View details <Icon name="chevron" className="h-3.5 w-3.5" />
+          </button>
+        ) : !item.available ? (
           <span className="text-[11px] font-bold text-berry">Unavailable</span>
         ) : line ? (
           <QtyControl
@@ -1012,10 +1019,10 @@ function FoodCardWide({ item }: { item: MenuItem }) {
           />
         ) : (
           <button
-            onClick={() => { if (isChapatiItem(item.id)) { select(item); go('details') } else add(item) }}
+            onClick={() => add(item)}
             className="flex items-center gap-1 rounded-full bg-tangerine-soft px-3 py-1.5 text-xs font-bold text-tangerine-dark active:scale-95"
           >
-            <Icon name="plus" className="h-3.5 w-3.5" /> {isChapatiItem(item.id) ? 'Choose sabji' : 'Add'}
+            <Icon name="plus" className="h-3.5 w-3.5" /> Add
           </button>
         )}
       </div>
@@ -1027,10 +1034,11 @@ function HomeScreen() {
   const { go, user, menu: MENU, orders, selectOrder, notifications, menuLoading, menuError, refresh, setMenuCategory, lunch, dinner } = useStore()
   const [rushNow, setRushNow] = useState(() => new Date())
   useEffect(() => {
-    const timer = setInterval(() => setRushNow(new Date()), 30000)
     const update = () => setRushNow(new Date())
+    const timer = setInterval(update, 1000)
     window.addEventListener('focus', update)
-    return () => { clearInterval(timer); window.removeEventListener('focus', update) }
+    window.addEventListener('visibilitychange', update, true)
+    return () => { clearInterval(timer); window.removeEventListener('focus', update); window.removeEventListener('visibilitychange', update, true) }
   }, [])
   const rush = nextRush(rushNow, lunch, dinner)
   const firstName = user?.name ? user.name.split(' ')[0] : 'Student'
@@ -1091,7 +1099,7 @@ function HomeScreen() {
       </div>
 
       {/* Promo */}
-      <div className="mx-5 mt-5 flex items-center gap-4 overflow-hidden rounded-3xl bg-tangerine-soft p-5">
+      {rush && <div className="mx-5 mt-5 flex items-center gap-4 overflow-hidden rounded-3xl bg-tangerine-soft p-5">
         <div className="flex-1">
           <p className="font-display text-lg font-bold text-tangerine-dark">
             {rush.title}
@@ -1107,7 +1115,7 @@ function HomeScreen() {
           </button>
         </div>
         <span className="text-5xl">⏱️</span>
-      </div>
+      </div>}
 
       <div className="mb-2 mt-6 flex items-center justify-between px-5">
         <h2 className="font-display text-lg font-bold">Popular today</h2>
@@ -1213,6 +1221,10 @@ function DetailsScreen() {
           </div>
 
           <p className="mt-4 text-sm leading-relaxed text-ink-soft">{item.desc}</p>
+          {item.lunch && <p className="mt-3 flex items-center gap-1.5 text-xs font-semibold text-ink-soft">
+            <Icon name="clock" className="h-3.5 w-3.5 text-tangerine" />
+            {mealLabel(bundleMeal(item))} · {mealServiceHours(item.lunch.serviceWindow) ? `${mealServiceHours(item.lunch.serviceWindow)} IST` : 'Service hours unavailable. Refresh the menu.'}
+          </p>}
           {isChapatiItem(item.id) && <fieldset className="mt-4">
             <legend className="text-sm font-bold">Choose 1 sabji (required)</legend>
             {item.lunch?.sabjiOptions.map(sabji => <label key={sabji} className="mt-2 flex cursor-pointer items-center gap-3 rounded-2xl border border-line p-3 text-sm">

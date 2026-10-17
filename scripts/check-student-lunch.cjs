@@ -158,7 +158,7 @@ function view(app, name, props) { app.render(); app.runtime.begin(name); return 
     assert.equal(all.filter(node=>node.type?.name==='FoodCardWide'&&node.props.item.lunch).length,0);
     assert.ok(all.some(node=>node.type?.name==='SearchBar'));
     assert.match(text(home),/Good afternoon.*Hey,.*Student.*Main Block Canteen/);
-    assert.match(text(home),/Snacks.*Meals.*Beverages.*Quick Bites.*Beat .* rush.*Order ahead.*Popular today.*See all/);
+    assert.match(text(home),/Snacks.*Meals.*Beverages.*Quick Bites.*Popular today.*See all/);
     assert.doesNotMatch(text(home),/Today.s lunch|Today.s dinner|Chapati Bhaji|Thali|19:30|Lunch closed/);
     assert.ok(all.some(node=>node.type?.name==='FoodCardWide'&&node.props.item.id===meal.id));
     all.find(node=>node.type==='button'&&text(node).includes('Meals')).props.onClick();assert.equal(app.render().menuCategory,'Meals');assert.equal(app.render().screen,'menu');
@@ -208,11 +208,33 @@ function view(app, name, props) { app.render(); app.runtime.begin(name); return 
     const app=harness({getDinnerMenu:async()=>structuredClone(dinner)});await app.login();app.api.getLunchMenu=async()=>{throw Error('Lunch network unavailable');};await app.render().refresh();let cards=nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide'&&node.props.item.lunch);assert.equal(cards.length,2);assert.ok(cards.every(node=>node.props.item.id.startsWith('dinner-')));
     app.api.getLunchMenu=async()=>structuredClone(lunch);await app.render().refresh();cards=nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide'&&node.props.item.lunch);assert.equal(cards.length,4);
   });
-  await check('Shared regular meal cards open choice details and keep direct Thali add interaction', async () => {
+  await check('Shared regular meal cards open details without outer sabji selection and keep direct available Thali add', async () => {
     const app=harness({getDinnerMenu:async()=>structuredClone(dinner)});await app.login();const card=view(app,'FoodCardWide',{item:app.render().menu.find(item=>item.id===h.DINNER_CHAPATI_BHAJI_ID)});
-    assert.match(text(card),/Chapati Bhaji.*45.*Dinner.*Choose sabji/);nodes(card).find(node=>node.type==='button'&&text(node).includes('Choose sabji')).props.onClick();assert.equal(app.render().screen,'details');assert.equal(app.render().cart.length,0);
+    assert.match(text(card),/Chapati Bhaji.*3 chapatis.*salad.*choice of 1 sabji/);assert.match(text(card),/2\s+sabji\s+options\s+available/);assert.match(text(card),/45.*Dinner.*View details/);
+    assert.doesNotMatch(text(card),/Choose sabji|Select one|Unavailable|19:30|22:30/);assert.equal(nodes(card).filter(node=>node.type==='input'&&node.props.type==='radio').length,0);
+    nodes(card).find(node=>node.type==='button'&&text(node).includes('View details')).props.onClick();assert.equal(app.render().screen,'details');assert.equal(app.render().cart.length,0);
     const details=view(app,'DetailsScreen'),radios=nodes(details).filter(node=>node.type==='input'&&node.props.type==='radio');assert.equal(radios.length,2);assert.equal(radios.map(node=>node.props.value).join('|'),'Beans|Peas');assert.equal(nodes(details).find(node=>node.type?.name==='Button'&&text(node).includes('Add')).props.disabled,true);
     const thaliCard=view(app,'FoodCardWide',{item:app.render().menu.find(item=>item.id===h.THALI_ID)});nodes(thaliCard).find(node=>node.type==='button'&&text(node).includes('Add')).props.onClick();assert.equal(app.render().cart.length,1);assert.equal(app.render().cart[0].item.id,h.THALI_ID);assert.equal(app.render().cartTotal,80);
+  });
+  await check('Chapati outer cards show the actual zero, one or two available sabji choices without selecting them', async () => {
+    for(const choices of [[],['Aloo'],['Paneer','Aloo']]) {
+      const menu={...structuredClone(lunch),configured:true,visible:true,sabjiOptions:choices,available:choices.length>0,
+        options:lunch.options.map(option=>({...option,visible:true,available:choices.length>0}))};
+      const app=harness({getLunchMenu:async()=>menu});await app.login();const item=app.render().menu.find(item=>item.id===h.CHAPATI_BHAJI_ID);assert.ok(item);
+      const card=view(app,'FoodCardWide',{item});assert.match(text(card),new RegExp(`${choices.length}\\s+sabji\\s+option${choices.length===1?'':'s'}\\s+available`));
+      assert.doesNotMatch(text(card),/Choose sabji|Select one|Unavailable/);assert.equal(nodes(card).filter(node=>node.type==='input'||node.type==='fieldset').length,0);
+      assert.equal(app.render().cart.length,0);nodes(card).find(node=>node.type==='button'&&text(node).includes('View details')).props.onClick();
+      assert.equal(app.render().screen,'details');const details=view(app,'DetailsScreen');assert.equal(nodes(details).filter(node=>node.type==='input'&&node.props.type==='radio').length,choices.length);
+      assert.equal(app.render().cart.length,0);
+    }
+  });
+  await check('Actual service hours appear inside Lunch and Dinner details, preserving backend timing metadata', async () => {
+    const configuredLunch={...structuredClone(lunch),serviceWindow:'12:00 - 15:00'};
+    const app=harness({getLunchMenu:async()=>configuredLunch,getDinnerMenu:async()=>structuredClone(dinner)});await app.login();
+    for(const [id,hours] of [[h.CHAPATI_BHAJI_ID,/12 PM\s*–\s*3 PM/],[h.THALI_ID,/12 PM\s*–\s*3 PM/],[h.DINNER_CHAPATI_BHAJI_ID,/7:30 PM\s*–\s*10:30 PM/],[h.DINNER_THALI_ID,/7:30 PM\s*–\s*10:30 PM/]]) {
+      const item=app.render().menu.find(item=>item.id===id);assert.ok(item);const card=view(app,'FoodCardWide',{item});assert.doesNotMatch(text(card),hours);
+      app.render().select(item);const details=view(app,'DetailsScreen');assert.match(text(details),hours);
+    }
   });
   await check('Dinner Details requires its own sabji, sends dinner revision and keeps lunch snapshot', async () => {
     const calls=[]; const app=harness({getDinnerMenu:async()=>structuredClone(dinner),createOrder:async(items)=>{calls.push(items);return {id:'d1',orderId:8,items:[],payment:'Paid'};}}); await app.login();
@@ -240,7 +262,12 @@ function view(app, name, props) { app.render(); app.runtime.begin(name); return 
       assert.equal(nodes(page).filter(node=>node.type==='button'&&/^(Lunch|Dinner)$/.test(text(node))).length,0);
       for(const entry of cards.filter(node=>node.props.item.lunch)) {
         assert.equal(entry.props.item.available,false); const card=view(app,'FoodCardWide',{item:entry.props.item});
-        assert.match(text(card),/Dinner opens at 19:30.*Unavailable/); assert.equal(nodes(card).filter(node=>node.type==='button'&&/Add|Choose sabji/.test(text(node))).length,0);
+        assert.doesNotMatch(text(card),/Dinner opens at 19:30|Unavailable|19:30|22:30|Choose sabji/);
+        assert.equal(nodes(card).filter(node=>/text-berry/.test(node.props?.className||'')).length,0);
+        assert.equal(nodes(card).filter(node=>node.type==='button'&&/Add|Choose sabji/.test(text(node))).length,0);
+        const detailsButton=nodes(card).find(node=>node.type==='button'&&text(node).includes('View details'));assert.ok(detailsButton);assert.notEqual(detailsButton.props.disabled,true);detailsButton.props.onClick();assert.equal(app.render().screen,'details');
+        const details=view(app,'DetailsScreen');assert.match(text(details),/7:30 PM\s*–\s*10:30 PM/);assert.match(text(details),/Dinner opens at 19:30/);
+        assert.equal(nodes(details).filter(node=>node.type?.name==='Button'&&text(node).includes('Add')&&!node.props.disabled).length,0);
         assert.equal(app.render().add({...entry.props.item,available:true},1,'Beans'),false);
       }
     }
@@ -258,13 +285,13 @@ function view(app, name, props) { app.render(); app.runtime.begin(name); return 
     assert.equal(nodes(page).filter(node=>node.type?.name==='FoodCardWide').length,2);
     app.render().setMenuCategory('Beverages'); assert.equal(nodes(view(app,'MenuScreen')).filter(node=>node.type?.name==='FoodCardWide').length,0);
   });
-  await check('Home rush updates while open and removes its interval and focus listener on unmount', async () => {
+  await check('Home rush updates to hidden outside its window and cleans up interval and event listeners', async () => {
     let instant='2026-10-16T11:00:00+05:30',focus,removed=0;
     class Clock extends Date { constructor(...args){super(...(args.length?args:[instant]));} }
     const app=appHarness({getLunchMenu:async()=>({...lunch,serviceStart:'12:00'}),getDinnerMenu:async()=>({...dinner,serviceStart:'19:30'})},{Date:Clock,window:{addEventListener:(type,callback)=>{if(type==='focus')focus=callback;},removeEventListener:(type,callback)=>{if(type==='focus'&&callback===focus)removed++;}}});
     await app.login(); let page=view(app,'HomeScreen'); app.runtime.commit(); assert.match(text(page),/Beat the 12 PM lunch rush/);
-    instant='2026-10-16T16:00:00+05:30'; for(const callback of app.runtime.intervals.values()) callback(); page=view(app,'HomeScreen'); assert.match(text(page),/Beat the 7:30 PM dinner rush/);
-    instant='2026-10-16T23:00:00+05:30'; focus(); page=view(app,'HomeScreen'); assert.match(text(page),/Beat tomorrow.s 12 PM lunch rush/);
+    instant='2026-10-16T16:00:00+05:30'; for(const callback of app.runtime.intervals.values()) callback(); page=view(app,'HomeScreen'); assert.doesNotMatch(text(page),/Beat .*rush|Order ahead/);
+    instant='2026-10-16T23:00:00+05:30'; focus(); page=view(app,'HomeScreen'); assert.doesNotMatch(text(page),/Beat .*rush|Order ahead|tomorrow/);
     const timers=app.runtime.intervals.size; app.runtime.unmount('HomeScreen'); assert.equal(app.runtime.intervals.size,timers-1); assert.equal(removed,1);
   });
   console.log(`Student lunch/dinner checks passed: ${passed}. No network, database, deployment or APK changes performed.`);

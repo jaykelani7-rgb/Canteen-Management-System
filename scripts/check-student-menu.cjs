@@ -21,6 +21,7 @@ function hooks() {
     useEffect: (run, deps) => { const index = cursor++, prior = group[index]; if (!prior || !deps || deps.some((value, i) => !Object.is(value, prior.deps[i]))) { group[index] = { deps, cleanup: prior?.cleanup }; effects.push(() => { prior?.cleanup?.(); group[index].cleanup = run(); }); } },
   };
   const runtime = { react, store: null, begin, commit: () => { while (effects.length) effects.shift()(); }, intervals,
+    unmount: key => { for (const slot of groups.get(key) || []) slot?.cleanup?.(); groups.delete(key); },
     setInterval: callback => { const id = ++timer; intervals.set(id, callback); return id; }, clearInterval: id => intervals.delete(id) };
   return runtime;
 }
@@ -44,7 +45,7 @@ const text = element => {
 };
 const meal = { id: 'meal', name: 'Dosa', desc: 'South Dish', category: 'Meals', price: 40, photo: '', rating: 0, available: true, veg: true, emoji: '🍽️', prepMins: 10 };
 
-function appHarness(overrides = {}) {
+function appHarness(overrides = {}, globals = {}) {
   const runtime = hooks(), user = { id: 'student-a', name: 'Student' };
   const api = { hasSession: () => false, getMenu: async () => [meal], getDinnerMenu: async () => ({ date: '2026-10-15', day: 'Thursday', mealType: 'dinner', available: false, unavailableReason: 'Dinner unconfigured', mealRevision: null, contents: [], sabjiOptions: [], options: [] }), getLunchMenu: async () => ({ date: '2026-10-15', day: 'Thursday', mealType: 'lunch', available: false, unavailableReason: 'Lunch unconfigured', mealRevision: null, contents: [], sabjiOptions: [], options: [] }), getOrders: async () => [], getNotifications: async () => [], getMe: async () => ({ success: true, user }), login: async () => ({ success: true, user }), logout: async () => {}, ...overrides };
   const app = load('student/src/App.tsx', {
@@ -52,7 +53,7 @@ function appHarness(overrides = {}) {
     '../../src/lib/paymentCheckout': {}, '../../src/lib/studentLunch': load('src/lib/studentLunch.ts', {}), '../../src/lib/studentRush': load('src/lib/studentRush.ts', {}), '../../src/components/FoodImage': { default: function FoodImage() {} },
     '../../src/components/FoodPhotoCredits': { default: function FoodPhotoCredits() {} },
   }, { setTimeout: () => 1, clearTimeout() {}, setInterval: runtime.setInterval, clearInterval: runtime.clearInterval,
-    document: { visibilityState: 'visible' }, window: { addEventListener() {}, removeEventListener() {} } }, '\nexport { HomeScreen, MenuScreen };');
+    document: { visibilityState: 'visible', addEventListener() {}, removeEventListener() {} }, window: { addEventListener() {}, removeEventListener() {} }, ...globals }, '\nexport { HomeScreen, MenuScreen };');
   function render() { runtime.begin('App'); runtime.store = app.default().props.value; runtime.commit(); return runtime.store; }
   const mounted = { app, api, runtime, render, login: async () => { await render().loginUser('ROLL', 'PASS'); render(); await tick(); return render(); } };
   render(); return mounted;
@@ -132,6 +133,34 @@ function appHarness(overrides = {}) {
     nodes(view).find(node => node.type === 'input').props.onChange({ target: { value: ' South Dish ' } }); h.runtime.begin('Menu'); view = h.app.MenuScreen(); assert.equal(nodes(view).filter(node => node.type?.name === 'FoodCardWide').length, 2);
     store.add({ ...sold, available: true }); assert.equal(h.render().cart.length, 0); h.render().add({ ...meal, price: 999 }); store = h.render(); assert.equal(store.cartTotal, 40);
     h.api.getMenu = async () => [{ ...meal, price: 30, available: false }]; await store.refresh(); store = h.render(); assert.equal(store.cartTotal, 30); assert.equal(store.cart[0].item.available, false); await assert.rejects(store.submitOrder('wallet'), /unavailable/);
+  });
+  await check('Mounted Home follows all nine IST boundaries without refresh, retains CTA and removes the whole promo when hidden', async () => {
+    let instant = '2026-10-16T09:59:00+05:30';
+    class Clock extends Date { constructor(...args) { super(...(args.length ? args : [instant])); } }
+    const listeners = new Map(), removed = [];
+    const target = prefix => ({
+      addEventListener: (type, callback) => listeners.set(prefix + type, callback),
+      removeEventListener: (type, callback) => { const key = prefix + type; if (listeners.get(key) === callback) { listeners.delete(key); removed.push(key); } },
+    });
+    const doc = { visibilityState: 'visible', ...target('document:') };
+    const h = appHarness({}, { Date: Clock, window: target('window:'), document: doc }); await h.login();
+    const renderHome = () => { h.render(); h.runtime.begin('Home'); const page = h.app.HomeScreen(); h.runtime.commit(); return page; };
+    renderHome();
+    for (const [time, expected] of [['09:59:00', null], ['10:00:00', 'lunch'], ['11:59:00', 'lunch'], ['12:00:00', null], ['17:59:00', null], ['18:00:00', 'dinner'], ['18:59:00', 'dinner'], ['19:00:00', null], ['21:49:00', null]]) {
+      instant = `2026-10-16T${time}+05:30`;
+      for (const callback of h.runtime.intervals.values()) callback();
+      const page = renderHome(), promo = nodes(page).filter(node => node.type === 'div' && /overflow-hidden.*bg-tangerine-soft/.test(node.props.className || ''));
+      assert.equal(promo.length, expected ? 1 : 0, time + ' full card visibility');
+      if (expected) {
+        assert.match(text(promo[0]), new RegExp(`Beat the ${expected === 'lunch' ? '12 PM lunch' : '7 PM dinner'} rush`));
+        nodes(promo[0]).find(node => node.type === 'button' && text(node) === 'Order ahead').props.onClick(); assert.equal(h.render().screen, 'menu');
+      } else assert.doesNotMatch(text(page), /Beat .*rush|Order ahead|⏱️/, time);
+      assert.match(text(page), /Popular today.*See all/);
+    }
+    instant = '2026-10-16T10:00:00+05:30'; assert.ok(listeners.has('window:focus')); listeners.get('window:focus')(); assert.match(text(renderHome()), /Beat the 12 PM lunch rush/);
+    instant = '2026-10-16T12:00:00+05:30'; assert.ok(listeners.has('window:visibilitychange')); listeners.get('window:visibilitychange')(); assert.doesNotMatch(text(renderHome()), /Beat .*rush|Order ahead/);
+    const timers = h.runtime.intervals.size; h.runtime.unmount('Home'); assert.equal(h.runtime.intervals.size, timers - 1);
+    assert.ok(removed.includes('window:focus')); assert.ok(removed.includes('window:visibilitychange'));
   });
   console.log(`Student menu checks passed: ${passed}. No network, database or build changes performed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
