@@ -49,7 +49,7 @@ function appHarness(overrides = {}, globals = {}) {
   const runtime = hooks(), user = { id: 'student-a', name: 'Student' };
   const api = { hasSession: () => false, getMenu: async () => [meal], getDinnerMenu: async () => ({ date: '2026-10-15', day: 'Thursday', mealType: 'dinner', available: false, unavailableReason: 'Dinner unconfigured', mealRevision: null, contents: [], sabjiOptions: [], options: [] }), getLunchMenu: async () => ({ date: '2026-10-15', day: 'Thursday', mealType: 'lunch', available: false, unavailableReason: 'Lunch unconfigured', mealRevision: null, contents: [], sabjiOptions: [], options: [] }), getOrders: async () => [], getNotifications: async () => [], getMe: async () => ({ success: true, user }), login: async () => ({ success: true, user }), logout: async () => {}, ...overrides };
   const app = load('student/src/App.tsx', {
-    react: runtime.react, '../../src/lib/apiClient': { apiClient: api, STUDENT_SESSION_EXPIRED: 'expired' },
+    react: runtime.react, './navigation': load('student/src/navigation.ts', {}), './native': { attachStudentNativeBack: () => () => {} }, '../../src/lib/apiClient': { apiClient: api, STUDENT_SESSION_EXPIRED: 'expired' },
     '../../src/lib/paymentCheckout': { checkoutIntent: () => 'lunch-test-key', clearCheckoutIntent() {} }, '../../src/lib/studentLunch': load('src/lib/studentLunch.ts', {}), '../../src/lib/studentRush': load('src/lib/studentRush.ts', {}), '../../src/components/FoodImage': { default: function FoodImage() {} },
     '../../src/components/FoodPhotoCredits': { default: function FoodPhotoCredits() {} },
   }, { setTimeout: () => 1, clearTimeout() {}, setInterval: runtime.setInterval, clearInterval: runtime.clearInterval,

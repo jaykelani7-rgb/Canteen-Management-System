@@ -103,14 +103,14 @@ def issue_session(response: Response, request: Request, token: str, role: str) -
         raise HTTPException(status_code=503, detail="Cookie sessions are unavailable")
     validate_session_origin(request, role)
     response.set_cookie(COOKIE_NAMES[role], token, max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-                        httponly=True, secure=settings.ENVIRONMENT == "production", samesite="lax", path="/api")
+                        httponly=True, secure=settings.ENVIRONMENT in {"production", "staging"}, samesite="lax", path="/api")
     response.headers["Cache-Control"] = "no-store"
     return True
 
 
 def clear_session(response: Response, role: str) -> None:
     response.delete_cookie(COOKIE_NAMES[role], path="/api",
-                           secure=settings.ENVIRONMENT == "production", httponly=True, samesite="lax")
+                           secure=settings.ENVIRONMENT in {"production", "staging"}, httponly=True, samesite="lax")
     response.headers["Cache-Control"] = "no-store"
 
 

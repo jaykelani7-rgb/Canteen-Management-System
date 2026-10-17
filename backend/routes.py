@@ -217,7 +217,7 @@ async def get_today_menu(
     4. On cache miss, queries PostgreSQL, caches the result in Redis with a TTL, and returns.
     """
     from zoneinfo import ZoneInfo
-    if settings.ENVIRONMENT == "production" and (simulated_time is not None or simulated_day is not None):
+    if settings.ENVIRONMENT in {"production", "staging"} and (simulated_time is not None or simulated_day is not None):
         raise HTTPException(422, "Menu simulation is unavailable in production")
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
 

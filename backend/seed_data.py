@@ -394,7 +394,7 @@ SAMPLE_DEMO_STUDENTS = [
 
 
 async def seed():
-    if getattr(settings, "ENVIRONMENT", "development") == "production":
+    if getattr(settings, "ENVIRONMENT", "development") in {"production", "staging"}:
         raise RuntimeError("Demo seeding is disabled in production")
     if not getattr(settings, "ENABLE_DEMO_DATA", False):
         raise RuntimeError("Demo seeding requires explicit ENABLE_DEMO_DATA=true in development/test")

@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Canteen Management System API"
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api"
-    ENVIRONMENT: Literal["development", "test", "production"] = "development"
+    ENVIRONMENT: Literal["development", "test", "staging", "production"] = "development"
     DATABASE_URL: str
     DATABASE_POOL_SIZE: int = Field(default=5, ge=1, le=50)
     DATABASE_MAX_OVERFLOW: int = Field(default=5, ge=0, le=50)
@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     STAGING_QA_WALLET_ENABLED: bool = False
     STAGING_QA_STUDENT_ID: str = ""
     STAGING_QA_STUDENT_ROLL: str = ""
+    TEST_SIGNUP_WALLET_CREDIT_ENABLED: bool = False
     GEMINI_API_KEY: str = ""
     OCR_MODEL: str = "gemini-3.5-flash-lite"
     OCR_TIMEOUT_SECONDS: int = Field(default=30, ge=5, le=60)
@@ -75,7 +76,7 @@ class Settings(BaseSettings):
             if (origin.scheme not in ("https", "http") or not origin.hostname
                     or origin.username or origin.password or origin.path not in ("", "/")
                     or origin.query or origin.fragment
-                    or (self.ENVIRONMENT == "production" and origin.scheme != "https")):
+                    or (self.ENVIRONMENT in {"production", "staging"} and origin.scheme != "https")):
                 raise ValueError("Public API origin must be an explicit origin; production requires HTTPS")
             self.PUBLIC_API_ORIGIN = self.PUBLIC_API_ORIGIN.rstrip("/")
         return self
@@ -94,7 +95,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production(self):
-        if self.ENVIRONMENT != "production":
+        if self.ENVIRONMENT not in {"production", "staging"}:
             return self
         if len(self.SECRET_KEY.encode()) < 32 or self.SECRET_KEY.startswith("canteen_super_secure_"):
             raise ValueError("Production requires a fresh random signing secret of at least 32 bytes")

@@ -13,6 +13,7 @@ from models import StudentUser
 from rate_limit import enforce_rate_limit
 from config import settings
 from recovery_service import GENERIC_REQUEST_MESSAGE, INVALID_CODE_MESSAGE, request_recovery, reset_passcode
+from signup_bonus import initialize_testing_signup_credit
 from schemas import (AuthResponse, ForgotPasscodeRequest, ResetPasscodeRequest,
                      StudentLoginRequest, StudentProfileResponse, StudentRegisterRequest)
 
@@ -58,6 +59,7 @@ async def register_student(payload: StudentRegisterRequest, request: Request, re
                           total_spent=0, saved_minutes=0, is_active=True)
     db.add(student)
     try:
+        await initialize_testing_signup_credit(db, student)
         await db.commit()
         await db.refresh(student)
     except IntegrityError:

@@ -30,7 +30,7 @@ async def enforce_rate_limit(request: Request, scope: str, identity: str = "", l
         try:
             count = int(await get_redis_client().eval(_SCRIPT, 1, key, seconds))
         except Exception:
-            if settings.ENVIRONMENT == "production":
+            if settings.ENVIRONMENT in {"production", "staging"}:
                 raise HTTPException(status_code=503, detail="Service temporarily unavailable")
             now = time.monotonic()
             count, expires = _LOCAL_WINDOWS.get(key, (0, now + seconds))

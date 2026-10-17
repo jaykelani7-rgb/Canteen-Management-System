@@ -66,7 +66,7 @@ def image_url(image_id):
     parsed = urlsplit(origin)
     if (not origin or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment
             or parsed.path not in ("", "/") or parsed.scheme not in {"https", "http"}
-            or (settings.ENVIRONMENT == "production" and parsed.scheme != "https")):
+            or (settings.ENVIRONMENT in {"production", "staging"} and parsed.scheme != "https")):
         raise HTTPException(503, "Public image delivery is not configured")
     if not re.fullmatch(r"[a-f0-9]{32}", image_id or ""):
         raise HTTPException(422, "Invalid managed image identifier")

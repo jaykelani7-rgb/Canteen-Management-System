@@ -60,7 +60,7 @@ def get_redis_client() -> aioredis.Redis:
         parsed = urlsplit(redis_url)
         # Docker Desktop publishes IPv4 loopback; Windows may resolve localhost to IPv6 first.
         # Keep production and TLS hostnames intact, including their certificate validation.
-        if settings.ENVIRONMENT != "production" and parsed.scheme == "redis" and parsed.hostname == "localhost":
+        if settings.ENVIRONMENT not in {"production", "staging"} and parsed.scheme == "redis" and parsed.hostname == "localhost":
             account = parsed.netloc.rsplit("@", 1)[0] + "@" if "@" in parsed.netloc else ""
             redis_url = parsed._replace(netloc=account + "127.0.0.1:" + str(parsed.port or 6379)).geturl()
         redis_client = aioredis.from_url(
@@ -126,7 +126,7 @@ async def cache_invalidate_prefix(prefix: str) -> int:
 # -------------------------------------------------------------------------
 async def init_db() -> None:
     """Create all tables in the database if they do not already exist."""
-    if getattr(settings, "ENVIRONMENT", "development") == "production":
+    if getattr(settings, "ENVIRONMENT", "development") in {"production", "staging"}:
         raise RuntimeError("Production schema changes must use reviewed Alembic migrations")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

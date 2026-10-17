@@ -11,6 +11,8 @@ import type { UserProfile, AuthResponse, RegisterInput, StudentMenuItem, Student
 import { checkoutIntent, clearCheckoutIntent, completeGatewayPayment, completeWalletTopup, walletTopupIntent, clearWalletTopupIntent, CheckoutDismissed } from '../../src/lib/paymentCheckout'
 import { isChapatiItem, isLunchItem, bundleMeal, mealLabel, type BundleMeal, lunchItems, lunchLineKey, lunchCartError, mealCartError, lunchOrderInput, lunchContents } from '../../src/lib/studentLunch'
 import { nextRush } from '../../src/lib/studentRush'
+import { createStudentNavigation, type StudentScreen as Screen } from './navigation'
+import { attachStudentNativeBack } from './native'
 import './student.css'
 
 /* ============================================================================
@@ -27,22 +29,6 @@ type OrderStatus = StudentOrderStatus
 type PastOrder = StudentOrder
 
 /* ------------------------------ App context ------------------------------- */
-
-type Screen =
-  | 'login'
-  | 'home'
-  | 'menu'
-  | 'details'
-  | 'cart'
-  | 'checkout'
-  | 'confirm'
-  | 'tracking'
-  | 'ready'
-  | 'history'
-  | 'orderDetails'
-  | 'notifications'
-  | 'profile'
-  | 'wallet'
 
 type CartLine = { key: string; item: MenuItem; qty: number; sabjiChoice?: string }
 
@@ -1399,12 +1385,14 @@ function CheckoutScreen() {
   const [submitting, setSubmitting] = useState(false)
   const [unconfirmed, setUnconfirmed] = useState(false)
   const submitLock = useRef(false)
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const placeOrder = async () => {
     if (submitLock.current || !cart.length) return
     submitLock.current = true; setSubmitting(true); setFailed(null)
-    try { const placed = await submitOrder(pay); go(placed.payment === 'Paid' ? 'confirm' : 'tracking') }
-    catch (e) { setFailed((e as Error).message); if ((e as { status?: number }).status === 0) setUnconfirmed(true) }
-    finally { submitLock.current = false; setSubmitting(false) }
+    try { const placed = await submitOrder(pay); if (mounted.current) go(placed.payment === 'Paid' ? 'confirm' : 'tracking') }
+    catch (e) { if (mounted.current) { setFailed((e as Error).message); if ((e as { status?: number }).status === 0) setUnconfirmed(true) } }
+    finally { submitLock.current = false; if (mounted.current) setSubmitting(false) }
   }
   const total = cartTotal
   return (
@@ -2050,8 +2038,14 @@ function WalletScreen() {
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('login')
+  const navigationRef = useRef<ReturnType<typeof createStudentNavigation> | null>(null)
+  if (!navigationRef.current) navigationRef.current = createStudentNavigation(setScreen)
+  const navigation = navigationRef.current
   const [user, setUser] = useState<UserProfile | null>(null)
   const [checking, setChecking] = useState(apiClient.hasSession())
+  const checkingRef = useRef(checking)
+  checkingRef.current = checking
+  useEffect(() => attachStudentNativeBack(() => checkingRef.current || navigation.back()), [])
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [orders, setOrders] = useState<StudentOrder[]>([])
   const [order, setOrder] = useState<StudentOrder | null>(null)
@@ -2077,13 +2071,13 @@ export default function App() {
   const userRef = useRef(user)
   userRef.current = user
   const showToast = (msg: string) => { if(toastTimer.current) clearTimeout(toastTimer.current); setToast(msg); toastTimer.current = setTimeout(() => setToast(null), 3500) }
-  const clearSession = () => { sessionVersion.current++; refreshInFlight.current = null; menuLoaded.current = false; setUser(null); setMenu([]); setLunch(null); setLunchError(null); setDinner(null); setDinnerError(null); setOrders([]); setOrder(null); setNotifications([]); setCart([]); setSelected(null); setError(null); setMenuError(null); setMenuLoading(false); setMenuCategory('All'); setBanner(null); setScreen('login'); setChecking(false); setLoading(false) }
+  const clearSession = () => { sessionVersion.current++; refreshInFlight.current = null; menuLoaded.current = false; setUser(null); setMenu([]); setLunch(null); setLunchError(null); setDinner(null); setDinnerError(null); setOrders([]); setOrder(null); setNotifications([]); setCart([]); setSelected(null); setError(null); setMenuError(null); setMenuLoading(false); setMenuCategory('All'); setBanner(null); navigation.reset('login'); setChecking(false); setLoading(false) }
   useEffect(() => {
     const expire = () => { const wasSignedIn = Boolean(userRef.current); clearSession(); if (wasSignedIn) showToast('Your session expired. Please sign in again.') }
     window.addEventListener(STUDENT_SESSION_EXPIRED, expire)
     let active = true
     const version = sessionVersion.current
-    if (apiClient.hasSession()) apiClient.getMe().then(res => { if(active && version === sessionVersion.current && res.success && res.user) { setUser(res.user); setScreen('home') } }).catch(e => { if(active && version === sessionVersion.current) setError((e as Error).message) }).finally(() => { if(active && version === sessionVersion.current) setChecking(false) })
+    if (apiClient.hasSession()) apiClient.getMe().then(res => { if(active && version === sessionVersion.current && res.success && res.user) { setUser(res.user); navigation.reset('home') } }).catch(e => { if(active && version === sessionVersion.current) setError((e as Error).message) }).finally(() => { if(active && version === sessionVersion.current) setChecking(false) })
     return () => { active = false; window.removeEventListener(STUDENT_SESSION_EXPIRED, expire); if(toastTimer.current) clearTimeout(toastTimer.current) }
   }, [])
   const refresh = async () => {
@@ -2145,8 +2139,8 @@ export default function App() {
     }
   }
   useEffect(() => { if(!user) return; void refresh(); const timer = setInterval(() => { if (document.visibilityState === 'visible') void refresh() }, 15000); return () => clearInterval(timer) }, [user?.id])
-  const loginUser = async (roll: string, passcode: string) => { const res = await apiClient.login(roll, passcode); if(res.success && res.user) { sessionVersion.current++; setUser(res.user); setScreen('home'); setError(null); showToast(`Welcome, ${res.user.name}!`) }; return res }
-  const registerUser = async (input: RegisterInput) => { const res = await apiClient.register(input); if(res.success && res.user) { sessionVersion.current++; setUser(res.user); setScreen('home'); setError(null); showToast(`Welcome, ${res.user.name}!`) }; return res }
+  const loginUser = async (roll: string, passcode: string) => { const res = await apiClient.login(roll, passcode); if(res.success && res.user) { sessionVersion.current++; setUser(res.user); navigation.reset('home'); setError(null); showToast(`Welcome, ${res.user.name}!`) }; return res }
+  const registerUser = async (input: RegisterInput) => { const res = await apiClient.register(input); if(res.success && res.user) { sessionVersion.current++; setUser(res.user); navigation.reset('home'); setError(null); showToast(`Welcome, ${res.user.name}!`) }; return res }
   const logoutUser = async () => { clearSession(); const version = sessionVersion.current; await apiClient.logout(); if(version === sessionVersion.current) showToast('Logged out successfully') }
   const rememberOrder = (next: StudentOrder) => { setOrder(next); setOrders(prev => [next, ...prev.filter(row => row.orderId !== next.orderId)]) }
   const completePayment = async (pending: StudentOrder) => {
@@ -2197,7 +2191,7 @@ export default function App() {
   const markRead = async () => { const version = sessionVersion.current; await apiClient.markAllNotificationsRead(); if(version === sessionVersion.current) setNotifications(prev => prev.map(n => ({...n,unread:false}))) }
   const store: Store = {
     screen, user, menu, orders, order, notifications, loading, error, menuLoading, menuError, lunch, lunchError, dinner, dinnerError, menuCategory, setMenuCategory, refresh, selectOrder: setOrder, submitOrder, completePayment, pickup, markRead,
-    go: next => { if(!user && next !== 'login') { setScreen('login'); return }; setScreen(next) }, loginUser, registerUser, logoutUser,
+    go: next => { if(!user && next !== 'login') { navigation.reset('login'); return }; navigation.go(next) }, loginUser, registerUser, logoutUser,
     cart, add: (item, qty = 1, sabjiChoice) => {
       const current = menu.find(next => next.id === item.id)
       if (!current?.available || !Number.isInteger(qty) || qty < 1) { showToast('This item is currently unavailable'); return false }

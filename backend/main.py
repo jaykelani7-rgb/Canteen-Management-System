@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
-        if settings.ENVIRONMENT == "production":
+        if settings.ENVIRONMENT in {"production", "staging"}:
             await verify_schema_revision()
         elif settings.AUTO_CREATE_SCHEMA:
             await init_db()
@@ -59,9 +59,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.PROJECT_NAME, version=settings.VERSION, lifespan=lifespan,
-              docs_url=None if settings.ENVIRONMENT == "production" else "/docs",
-              redoc_url=None if settings.ENVIRONMENT == "production" else "/redoc",
-              openapi_url=None if settings.ENVIRONMENT == "production" else "/openapi.json")
+              docs_url=None if settings.ENVIRONMENT in {"production", "staging"} else "/docs",
+              redoc_url=None if settings.ENVIRONMENT in {"production", "staging"} else "/redoc",
+              openapi_url=None if settings.ENVIRONMENT in {"production", "staging"} else "/openapi.json")
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.TRUSTED_HOSTS)
 app.add_middleware(CORSMiddleware, allow_origins=settings.CORS_ORIGINS,
                    allow_credentials=settings.SESSION_COOKIE_MODE_ENABLED,
